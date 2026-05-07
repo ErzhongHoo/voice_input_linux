@@ -23,7 +23,7 @@ def build_text_injector(config: AppConfig) -> TextInjectorBackend:
         "fcitx5": Fcitx5Injector(),
         "xdotool": XdotoolInjector(),
         "wtype": WtypeInjector(),
-        "ydotool": YdotoolInjector(),
+        "ydotool": YdotoolInjector(config.paste_hotkey),
         "clipboard": ClipboardInjector(config.paste_hotkey),
     }
 
@@ -37,9 +37,23 @@ def build_text_injector(config: AppConfig) -> TextInjectorBackend:
     if config.prefer_fcitx5:
         candidates.append(Fcitx5Injector())
     if _is_wayland():
-        candidates.extend([ClipboardInjector(config.paste_hotkey), WtypeInjector(), YdotoolInjector(), XdotoolInjector()])
+        candidates.extend(
+            [
+                ClipboardInjector(config.paste_hotkey),
+                WtypeInjector(),
+                YdotoolInjector(config.paste_hotkey),
+                XdotoolInjector(),
+            ]
+        )
     else:
-        candidates.extend([XdotoolInjector(), ClipboardInjector(config.paste_hotkey), WtypeInjector(), YdotoolInjector()])
+        candidates.extend(
+            [
+                XdotoolInjector(),
+                ClipboardInjector(config.paste_hotkey),
+                WtypeInjector(),
+                YdotoolInjector(config.paste_hotkey),
+            ]
+        )
     available = [candidate for candidate in candidates if candidate.is_available()]
     if not available:
         LOGGER.warning("No text injector backend reports available; clipboard fallback will still be tried")
