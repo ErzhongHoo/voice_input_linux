@@ -1,0 +1,27 @@
+[Desktop Entry]
+Type=Application
+Name=Voice Input Linux
+Name[zh_CN]=Linux 语音输入
+Comment=Desktop dictation service with global hotkey
+Comment[zh_CN]=通过全局快捷键进行桌面语音输入
+Exec=voice-input-linux
+Icon=voice-input-linux
+Terminal=false
+Categories=Utility;Accessibility;
+StartupNotify=false
+Actions=Settings;Toggle;Quit;
+
+[Desktop Action Settings]
+Name=Settings
+Name[zh_CN]=设置
+Exec=voice-input-linux settings
+
+[Desktop Action Toggle]
+Name=Toggle Recording
+Name[zh_CN]=开始或停止录音
+Exec=voice-input-linux toggle
+
+[Desktop Action Quit]
+Name=Quit
+Name[zh_CN]=退出
+Exec=voice-input-linux quit

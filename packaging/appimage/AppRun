@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "${0}")")"
+APP_BIN="${HERE}/usr/opt/voice-input-linux/voice-input-linux"
+APP_INTERNAL="${HERE}/usr/opt/voice-input-linux/_internal"
+GLIBC_DIR="${HERE}/usr/lib/voice-input-linux/glibc"
+
+export VOICE_INPUT_APPDIR="${HERE}"
+if [[ -n "${APPIMAGE:-}" ]]; then
+  export VOICE_INPUT_APPIMAGE="${APPIMAGE}"
+fi
+
+if [[ -x "${GLIBC_DIR}/ld-linux-x86-64.so.2" ]]; then
+  export VOICE_INPUT_BUNDLED_GLIBC=1
+  exec "${GLIBC_DIR}/ld-linux-x86-64.so.2" \
+    --library-path "${GLIBC_DIR}:${APP_INTERNAL}" \
+    "${APP_BIN}" "$@"
+fi
+
+if [[ -x "${GLIBC_DIR}/ld-linux-aarch64.so.1" ]]; then
+  export VOICE_INPUT_BUNDLED_GLIBC=1
+  exec "${GLIBC_DIR}/ld-linux-aarch64.so.1" \
+    --library-path "${GLIBC_DIR}:${APP_INTERNAL}" \
+    "${APP_BIN}" "$@"
+fi
+
+exec "${APP_BIN}" "$@"

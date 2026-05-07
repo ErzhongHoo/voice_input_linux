@@ -1,0 +1,10 @@
+PySide6>=6.6
+sounddevice>=0.4.6
+numpy>=1.24
+websockets>=12
+pynput>=1.7
+evdev>=1.6
+dbus-next>=0.2.3
+pyperclip>=1.8
+pytest>=7.4
+

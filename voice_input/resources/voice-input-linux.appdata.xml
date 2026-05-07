@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ezhonghu.openshandianshuo.voiceinputlinux</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Voice Input Linux</name>
+  <summary>Desktop dictation service with global hotkey</summary>
+  <developer id="io.github.ezhonghu">
+    <name>openShanDianShuo contributors</name>
+  </developer>
+  <description>
+    <p>
+      Voice Input Linux provides a tray-based dictation workflow for Linux desktops.
+      Press a hotkey to record, stream microphone audio to ASR, and paste the recognized
+      text into the focused application.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.ezhonghu.openshandianshuo.voiceinputlinux.desktop</launchable>
+  <url type="homepage">https://github.com</url>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>voice-input-linux</binary>
+  </provides>
+  <categories>
+    <category>Utility</category>
+    <category>Accessibility</category>
+  </categories>
+  <releases>
+    <release version="0.1.0" date="2026-05-04"/>
+  </releases>
+</component>

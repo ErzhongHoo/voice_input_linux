@@ -1,0 +1,14 @@
+[Unit]
+Description=Voice Input Linux desktop dictation service
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+Environment=VOICE_INPUT_CONFIG_FILE=__CONFIG_FILE__
+ExecStart=__PYTHON__ -m voice_input.main run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
