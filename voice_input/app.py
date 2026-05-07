@@ -13,7 +13,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .asr.base import AsrClient, AsrError
 from .asr.doubao_big_asr import DoubaoBigASRClient
@@ -420,12 +420,16 @@ class VoiceInputApp:
             return MockAsrClient(self.config.mock_text)
         if self.config.asr_provider in {"doubao", "doubao_big_asr", "bigmodel"}:
             return DoubaoBigASRClient(
-                endpoint=self.config.doubao_endpoint,
+                endpoint=self.config.effective_doubao_endpoint(),
                 app_key=self.config.doubao_app_key,
                 access_key=self.config.doubao_access_key,
                 resource_id=self.config.doubao_resource_id,
                 sample_rate=self.config.sample_rate,
                 channels=self.config.channels,
+                enable_punc=self.config.doubao_enable_punc,
+                enable_itn=self.config.doubao_enable_itn,
+                enable_ddc=self.config.doubao_enable_ddc,
+                enable_nonstream=self.config.effective_doubao_enable_nonstream(),
             )
         raise AsrError(f"未知 ASR provider: {self.config.asr_provider}")
 
@@ -433,22 +437,14 @@ class VoiceInputApp:
         if self.is_recording:
             QMessageBox.warning(None, "Voice Input Linux 设置", "录音中不能修改设置，请先停止录音。")
             return
-        dialog = SettingsDialog(self.config)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        try:
-            write_env_file(self.config.config_file, dialog.to_env())
-            self._apply_new_config(load_config(self.config.config_file))
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("Failed to save settings")
-            QMessageBox.critical(None, "保存设置失败", str(exc))
-            return
-        self.tray.notify("设置已保存", f"配置文件: {self.config.config_file}")
+        dialog = SettingsDialog(self.config, on_auto_save=self.save_panel_settings)
+        dialog.exec()
 
-    def save_panel_settings(self, env: dict[str, str]) -> None:
+    def save_panel_settings(self, env: dict[str, str]) -> bool:
         if self.is_recording:
             QMessageBox.warning(self.control_panel, "Voice Input Linux 设置", "录音中不能修改设置，请先停止录音。")
-            return
+            return False
+        show_notification = env.pop("_VOICE_INPUT_SAVE_NOTIFICATION", "true") != "false"
         config_file = env.pop("VOICE_INPUT_CONFIG_FILE", self.config.config_file) or self.config.config_file
         try:
             write_env_file(config_file, env)
@@ -456,8 +452,10 @@ class VoiceInputApp:
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to save settings")
             QMessageBox.critical(self.control_panel, "保存设置失败", str(exc))
-            return
-        self.tray.notify("设置已保存", f"配置文件: {self.config.config_file}")
+            return False
+        if show_notification:
+            self.tray.notify("设置已保存", f"配置文件: {self.config.config_file}")
+        return True
 
     def show_environment(self) -> None:
         dialog = EnvironmentDialog(self.config, self.control_panel)

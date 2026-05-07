@@ -100,6 +100,11 @@ DOUBAO_ASR_ENDPOINT=wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async
 DOUBAO_ASR_APP_KEY=你的 App Key
 DOUBAO_ASR_ACCESS_KEY=你的 Access Key
 DOUBAO_ASR_RESOURCE_ID=volc.seedasr.sauc.duration
+DOUBAO_ASR_MODE=realtime_final
+DOUBAO_ASR_ENABLE_PUNC=true
+DOUBAO_ASR_ENABLE_ITN=true
+DOUBAO_ASR_ENABLE_DDC=false
+DOUBAO_ASR_ENABLE_NONSTREAM=true
 
 VOICE_INPUT_HOTKEY_BACKEND=auto
 VOICE_INPUT_HOTKEY_KEY=right_alt
@@ -120,6 +125,17 @@ VOICE_INPUT_DEVICE=Wireless Mic Rx 模拟立体声
 
 `VOICE_INPUT_APPEND_FINAL_PUNCTUATION=false` 时，识别结果末尾不会再由应用自动补 `。` 或 `.`；ASR 自己返回的问号、感叹号、句号等仍会保留。
 
+`DOUBAO_ASR_ENABLE_PUNC=false` 时，豆包 ASR 请求会关闭模型自动标点；这会同时影响逗号、问号、句号等由模型预测的标点。设置界面里“应用自动补句号”和“模型自动标点”是两个开关：前者只控制本应用后处理，后者控制豆包 ASR 请求参数。
+
+`DOUBAO_ASR_ENABLE_NONSTREAM=true` 会在双向流式优化版里开启二遍识别：先实时出字，再对分句音频复识别，以提高最终结果准确率。
+
+`DOUBAO_ASR_MODE` 可在设置界面用“识别模式”修改：
+
+- `realtime_final`：实时 + 二遍识别，默认推荐。
+- `realtime`：实时逐字，最快，最终结果可能不如二遍稳定。
+- `stream_input`：流式输入、整句返回，更稳但会慢一点。
+- `custom`：保留手动填写的 Endpoint 和二遍识别开关。
+
 ## 豆包 ASR
 
 当前接入的是火山引擎 / 豆包大模型流式语音识别 API：
@@ -127,6 +143,7 @@ VOICE_INPUT_DEVICE=Wireless Mic Rx 模拟立体声
 - Endpoint：`wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`
 - Resource ID：`volc.seedasr.sauc.duration`
 - 请求模型名：`bigmodel`
+- 默认开启模型自动标点、ITN 和二遍识别；关闭自动标点可设置 `DOUBAO_ASR_ENABLE_PUNC=false`
 - 音频：16 kHz、单声道、PCM signed 16-bit little-endian
 - 分包：约 200 ms
 
@@ -427,7 +444,7 @@ Recording stopped; audio stats chunks=20 max_level=0.0000
 1. 打开控制面板，点击“设置”。
 2. 进入“高级”页，在“麦克风”下拉框里选择有声音的输入设备。
 3. 如果刚插入新麦克风，点击“刷新”。
-4. 保存后重新录音测试。
+4. 修改后重新录音测试。
 
 列出设备：
 

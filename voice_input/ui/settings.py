@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
@@ -27,18 +28,37 @@ from PySide6.QtWidgets import (
 )
 
 from voice_input.audio.devices import InputDeviceInfo, list_input_devices, measure_input_device_level
-from voice_input.config import AppConfig, config_to_env
+from voice_input.config import (
+    DOUBAO_MODE_CUSTOM,
+    DOUBAO_MODE_REALTIME,
+    DOUBAO_MODE_REALTIME_FINAL,
+    DOUBAO_MODE_STREAM_INPUT,
+    AppConfig,
+    config_to_env,
+    doubao_endpoint_for_mode,
+)
 from voice_input.inject.base import InjectionError
 from voice_input.inject.clipboard_injector import copy_to_clipboard
 from voice_input.installer import install_service, toggle_command_text
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        parent: QWidget | None = None,
+        on_auto_save: Callable[[dict[str, str]], bool | None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Voice Input Linux 设置")
         self.setMinimumWidth(620)
         self.config = config
+        self._on_auto_save = on_auto_save
+        self._syncing_settings = True
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.setInterval(700)
+        self._auto_save_timer.timeout.connect(self._auto_save)
 
         self.config_path = QLineEdit(config.config_file or str(Path.cwd() / ".env"))
         self.config_path.setReadOnly(True)
@@ -48,10 +68,26 @@ class SettingsDialog(QDialog):
         self.asr_provider.setCurrentIndex(0)
 
         self.mock_text = QLineEdit(config.mock_text)
-        self.endpoint = QLineEdit(config.doubao_endpoint)
+        self.doubao_mode = NoWheelComboBox()
+        self.doubao_mode.addItem("实时 + 二遍识别（推荐）", DOUBAO_MODE_REALTIME_FINAL)
+        self.doubao_mode.addItem("实时逐字", DOUBAO_MODE_REALTIME)
+        self.doubao_mode.addItem("整句返回（更稳，慢一点）", DOUBAO_MODE_STREAM_INPUT)
+        self.doubao_mode.addItem("自定义 Endpoint", DOUBAO_MODE_CUSTOM)
+        _set_combo_data(self.doubao_mode, config.doubao_mode)
+        self.doubao_mode.currentIndexChanged.connect(self._handle_doubao_mode_changed)
+        self.endpoint = QLineEdit(config.effective_doubao_endpoint())
         self.app_key = SecretLineEdit(config.doubao_app_key)
         self.access_key = SecretLineEdit(config.doubao_access_key)
         self.resource_id = QLineEdit(config.doubao_resource_id)
+        self.doubao_enable_punc = QCheckBox("模型自动标点")
+        self.doubao_enable_punc.setChecked(config.doubao_enable_punc)
+        self.doubao_enable_itn = QCheckBox("数字规整 ITN")
+        self.doubao_enable_itn.setChecked(config.doubao_enable_itn)
+        self.doubao_enable_ddc = QCheckBox("语义顺滑")
+        self.doubao_enable_ddc.setChecked(config.doubao_enable_ddc)
+        self.doubao_enable_nonstream = QCheckBox("二遍识别")
+        self.doubao_enable_nonstream.setChecked(config.effective_doubao_enable_nonstream())
+        self._handle_doubao_mode_changed()
 
         self.hotkey_backend = NoWheelComboBox()
         self.hotkey_backend.addItems(["auto", "pynput", "evdev", "none"])
@@ -72,7 +108,7 @@ class SettingsDialog(QDialog):
         if config.paste_hotkey not in {"ctrl+v", "ctrl+shift+v", "shift+insert"}:
             self.paste_hotkey.addItem(config.paste_hotkey)
         self.paste_hotkey.setCurrentText(config.paste_hotkey)
-        self.append_final_punctuation = QCheckBox("自动补句号")
+        self.append_final_punctuation = QCheckBox("应用自动补句号")
         self.append_final_punctuation.setChecked(config.append_final_punctuation)
         self.toggle_command = QLineEdit(toggle_command_text())
         self.toggle_command.setReadOnly(True)
@@ -128,8 +164,8 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._desktop_tab(), "桌面")
         tabs.addTab(self._advanced_tab(), "高级")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._validate_and_accept)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
@@ -138,6 +174,64 @@ class SettingsDialog(QDialog):
         layout.addLayout(path_row)
         layout.addWidget(tabs)
         layout.addWidget(buttons)
+        self._connect_auto_save_fields()
+        self._syncing_settings = False
+
+    def _connect_auto_save_fields(self) -> None:
+        text_fields = [
+            self.mock_text,
+            self.endpoint,
+            self.app_key.line,
+            self.access_key.line,
+            self.resource_id,
+            self.hotkey_key,
+            self.evdev_key,
+            self.evdev_device,
+        ]
+        for field in text_fields:
+            field.textEdited.connect(self._schedule_auto_save)
+
+        combo_fields = [
+            self.asr_provider,
+            self.doubao_mode,
+            self.hotkey_backend,
+            self.injector_backend,
+            self.paste_hotkey,
+            self.input_device_combo,
+            self.overlay_theme,
+            self.log_level,
+        ]
+        for combo in combo_fields:
+            combo.currentIndexChanged.connect(self._schedule_auto_save)
+        self.input_device_combo.editTextChanged.connect(self._schedule_auto_save)
+
+        spin_fields = [self.sample_rate, self.channels, self.chunk_ms]
+        for spin in spin_fields:
+            spin.valueChanged.connect(self._schedule_auto_save)
+
+        check_fields = [
+            self.doubao_enable_punc,
+            self.doubao_enable_itn,
+            self.doubao_enable_ddc,
+            self.doubao_enable_nonstream,
+            self.prefer_fcitx5,
+            self.paste_at_mouse,
+            self.append_final_punctuation,
+        ]
+        for field in check_fields:
+            field.toggled.connect(self._schedule_auto_save)
+
+    def _schedule_auto_save(self) -> None:
+        if self._syncing_settings:
+            return
+        self._auto_save_timer.start()
+
+    def _auto_save(self) -> None:
+        if self._on_auto_save is None:
+            return
+        env = self.to_env()
+        env["_VOICE_INPUT_SAVE_NOTIFICATION"] = "false"
+        self._on_auto_save(env)
 
     def to_env(self) -> dict[str, str]:
         updated = AppConfig(
@@ -148,6 +242,11 @@ class SettingsDialog(QDialog):
             doubao_access_key=self.access_key.text().strip(),
             doubao_resource_id=self.resource_id.text().strip(),
             doubao_protocol=self.config.doubao_protocol,
+            doubao_mode=str(self.doubao_mode.currentData() or DOUBAO_MODE_REALTIME_FINAL),
+            doubao_enable_punc=self.doubao_enable_punc.isChecked(),
+            doubao_enable_itn=self.doubao_enable_itn.isChecked(),
+            doubao_enable_ddc=self.doubao_enable_ddc.isChecked(),
+            doubao_enable_nonstream=self.doubao_enable_nonstream.isChecked(),
             hotkey_backend=self.hotkey_backend.currentText(),
             hotkey_key=self.hotkey_key.text().strip() or "right_alt",
             evdev_device=self.evdev_device.text().strip(),
@@ -174,14 +273,32 @@ class SettingsDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.addRow("识别服务", self.asr_provider)
         form.addRow(_separator("豆包 / 火山引擎"))
+        form.addRow("识别模式", self.doubao_mode)
         form.addRow("Endpoint", self.endpoint)
         form.addRow("App Key", self.app_key)
         form.addRow("Access Key / Token", self.access_key)
         form.addRow("Resource ID", self.resource_id)
-        note = QLabel("Key 只保存到本机配置文件，不会写入日志。保存后下一次录音立即使用新 ASR 配置。")
+        form.addRow("", self.doubao_enable_punc)
+        form.addRow("", self.doubao_enable_itn)
+        form.addRow("", self.doubao_enable_ddc)
+        form.addRow("", self.doubao_enable_nonstream)
+        note = QLabel("Key 只保存到本机配置文件，不会写入日志。下一次录音使用新的 ASR 配置。")
         note.setWordWrap(True)
         form.addRow(note)
         return tab
+
+    def _handle_doubao_mode_changed(self) -> None:
+        mode = str(self.doubao_mode.currentData() or DOUBAO_MODE_REALTIME_FINAL)
+        endpoint = doubao_endpoint_for_mode(mode)
+        if endpoint:
+            self.endpoint.setText(endpoint)
+        self.endpoint.setReadOnly(mode != DOUBAO_MODE_CUSTOM)
+        if mode == DOUBAO_MODE_REALTIME_FINAL:
+            self.doubao_enable_nonstream.setChecked(True)
+        elif mode in {DOUBAO_MODE_REALTIME, DOUBAO_MODE_STREAM_INPUT}:
+            self.doubao_enable_nonstream.setChecked(False)
+        self.doubao_enable_nonstream.setEnabled(mode == DOUBAO_MODE_CUSTOM)
+        self._schedule_auto_save()
 
     def _desktop_tab(self) -> QWidget:
         tab = QWidget()
@@ -357,6 +474,9 @@ class SettingsDialog(QDialog):
         self.input_test_time.setText(f"{elapsed // 60:02d}:{elapsed % 60:02d}")
 
     def closeEvent(self, event: object) -> None:  # noqa: D401
+        if self._auto_save_timer.isActive():
+            self._auto_save_timer.stop()
+            self._auto_save()
         if self._test_worker is not None:
             self._test_worker.stop()
         if self._test_thread is not None and self._test_thread.isRunning():
@@ -409,20 +529,6 @@ class SettingsDialog(QDialog):
             return str(data).strip()
         return self.input_device_combo.currentText().strip()
 
-    def _validate_and_accept(self) -> None:
-        if self.asr_provider.currentData() == "doubao":
-            missing = []
-            if not self.endpoint.text().strip():
-                missing.append("Endpoint")
-            if not self.app_key.text().strip():
-                missing.append("App Key")
-            if not self.access_key.text().strip():
-                missing.append("Access Key")
-            if missing:
-                QMessageBox.warning(self, "配置不完整", "豆包 ASR 缺少: " + "、".join(missing))
-                return
-        self.accept()
-
 
 class SecretLineEdit(QWidget):
     def __init__(self, value: str = "") -> None:
@@ -450,6 +556,13 @@ class SecretLineEdit(QWidget):
 class NoWheelComboBox(QComboBox):
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         event.ignore()
+
+
+def _set_combo_data(combo: QComboBox, data: str) -> None:
+    for index in range(combo.count()):
+        if combo.itemData(index) == data:
+            combo.setCurrentIndex(index)
+            return
 
 
 def _separator(text: str) -> QFrame:

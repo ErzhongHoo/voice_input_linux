@@ -39,15 +39,13 @@ class OverlayWindow(QWidget):
     def __init__(self, theme: str = "auto") -> None:
         super().__init__(
             None,
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus,
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
         )
         self.theme = theme
+        self.setWindowTitle("VoiceInputOverlay")
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setFixedWidth(420)
+        self.setFixedWidth(320)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._drag_start: QPoint | None = None
         self._drag_window_start: QPoint | None = None
@@ -59,7 +57,7 @@ class OverlayWindow(QWidget):
         self.timer_label = QLabel("00:00")
         self.preview_label = QLabel("")
         self.preview_label.setWordWrap(True)
-        self.preview_label.setMaximumWidth(360)
+        self.preview_label.setMaximumWidth(260)
         self.waveform = WaveformWidget()
 
         row = QHBoxLayout()
@@ -71,8 +69,8 @@ class OverlayWindow(QWidget):
         row.addWidget(self.timer_label)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(6)
         layout.addLayout(row)
         layout.addWidget(self.preview_label)
 
@@ -137,16 +135,16 @@ class OverlayWindow(QWidget):
         self.adjustSize()
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen:
-            saved = self._saved_position()
-            if saved is None:
-                geometry = screen.availableGeometry()
-                self.move(self._default_position(geometry))
-            else:
-                saved_screen = QApplication.screenAt(saved) or screen
-                geometry = saved_screen.availableGeometry()
-                self.move(self._clamp_position(saved, geometry))
+            geometry = screen.availableGeometry()
+            # Always use bottom-center position
+            target_pos = self._default_position(geometry)
+            self.move(target_pos)
         self.show()
         self.raise_()
+        # Force position multiple times for Wayland
+        if screen:
+            for delay in [10, 50, 100, 200]:
+                QTimer.singleShot(delay, lambda p=target_pos: self.move(p))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -185,7 +183,7 @@ class OverlayWindow(QWidget):
 
     def _default_position(self, geometry: object) -> QPoint:
         x = geometry.x() + (geometry.width() - self.width()) // 2
-        y = geometry.y() + geometry.height() - self.height() - 20
+        y = geometry.y() + geometry.height() - self.height() - 80
         return QPoint(x, y)
 
     def _clamp_position(self, point: QPoint, geometry: object) -> QPoint:
@@ -213,11 +211,11 @@ class OverlayWindow(QWidget):
             OverlayWindow {{
                 background: {bg};
                 border: 1px solid rgba(148, 163, 184, 0.35);
-                border-radius: 14px;
+                border-radius: 50px;
             }}
             QLabel {{
                 color: {fg};
-                font-size: 14px;
+                font-size: 13px;
             }}
             QLabel#muted {{
                 color: {muted};

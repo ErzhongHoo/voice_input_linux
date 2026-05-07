@@ -50,6 +50,10 @@ class DoubaoBigASRClient(AsrClient):
         resource_id: str,
         sample_rate: int = 16000,
         channels: int = 1,
+        enable_punc: bool = True,
+        enable_itn: bool = True,
+        enable_ddc: bool = False,
+        enable_nonstream: bool = True,
     ) -> None:
         self.endpoint = endpoint
         self.app_key = app_key
@@ -57,6 +61,10 @@ class DoubaoBigASRClient(AsrClient):
         self.resource_id = resource_id
         self.sample_rate = sample_rate
         self.channels = channels
+        self.enable_punc = enable_punc
+        self.enable_itn = enable_itn
+        self.enable_ddc = enable_ddc
+        self.enable_nonstream = enable_nonstream
         self.request_id = str(uuid.uuid4())
         self._ws: Any | None = None
         self._sequence = 1
@@ -193,11 +201,12 @@ class DoubaoBigASRClient(AsrClient):
             },
             "request": {
                 "model_name": "bigmodel",
-                "enable_itn": True,
-                "enable_ddc": False,
+                "enable_itn": self.enable_itn,
+                "enable_ddc": self.enable_ddc,
+                "enable_nonstream": self.enable_nonstream,
                 "result_type": "full",
                 "show_utterances": True,
-                "enable_punc": True,
+                "enable_punc": self.enable_punc,
                 "end_window_size": 800,
                 "platform": "Linux",
             },

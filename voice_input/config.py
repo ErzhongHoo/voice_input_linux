@@ -9,8 +9,20 @@ from typing import Mapping
 
 
 TRUE_VALUES = {"1", "true", "yes", "on", "y"}
-DEFAULT_DOUBAO_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+DOUBAO_ENDPOINT_REALTIME = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+DOUBAO_ENDPOINT_STREAM_INPUT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
+DEFAULT_DOUBAO_ENDPOINT = DOUBAO_ENDPOINT_REALTIME
 DEFAULT_DOUBAO_RESOURCE_ID = "volc.seedasr.sauc.duration"
+DOUBAO_MODE_REALTIME_FINAL = "realtime_final"
+DOUBAO_MODE_REALTIME = "realtime"
+DOUBAO_MODE_STREAM_INPUT = "stream_input"
+DOUBAO_MODE_CUSTOM = "custom"
+DOUBAO_MODES = {
+    DOUBAO_MODE_REALTIME_FINAL,
+    DOUBAO_MODE_REALTIME,
+    DOUBAO_MODE_STREAM_INPUT,
+    DOUBAO_MODE_CUSTOM,
+}
 
 CONFIG_ENV_KEYS = [
     "VOICE_INPUT_ASR",
@@ -21,6 +33,11 @@ CONFIG_ENV_KEYS = [
     "DOUBAO_ASR_ACCESS_TOKEN",
     "DOUBAO_ASR_RESOURCE_ID",
     "DOUBAO_ASR_PROTOCOL",
+    "DOUBAO_ASR_MODE",
+    "DOUBAO_ASR_ENABLE_PUNC",
+    "DOUBAO_ASR_ENABLE_ITN",
+    "DOUBAO_ASR_ENABLE_DDC",
+    "DOUBAO_ASR_ENABLE_NONSTREAM",
     "VOICE_INPUT_HOTKEY_BACKEND",
     "VOICE_INPUT_HOTKEY_KEY",
     "VOICE_INPUT_EVDEV_KEY",
@@ -167,6 +184,11 @@ class AppConfig:
     doubao_access_key: str = ""
     doubao_resource_id: str = DEFAULT_DOUBAO_RESOURCE_ID
     doubao_protocol: str = "bigmodel_binary"
+    doubao_mode: str = DOUBAO_MODE_REALTIME_FINAL
+    doubao_enable_punc: bool = True
+    doubao_enable_itn: bool = True
+    doubao_enable_ddc: bool = False
+    doubao_enable_nonstream: bool = True
 
     hotkey_backend: str = "auto"
     hotkey_key: str = "right_alt"
@@ -205,6 +227,11 @@ class AppConfig:
             ),
             doubao_resource_id=values.get("DOUBAO_ASR_RESOURCE_ID", DEFAULT_DOUBAO_RESOURCE_ID),
             doubao_protocol=values.get("DOUBAO_ASR_PROTOCOL", "bigmodel_binary"),
+            doubao_mode=_get_doubao_mode(values),
+            doubao_enable_punc=_get_bool(values, "DOUBAO_ASR_ENABLE_PUNC", True),
+            doubao_enable_itn=_get_bool(values, "DOUBAO_ASR_ENABLE_ITN", True),
+            doubao_enable_ddc=_get_bool(values, "DOUBAO_ASR_ENABLE_DDC", False),
+            doubao_enable_nonstream=_get_bool(values, "DOUBAO_ASR_ENABLE_NONSTREAM", True),
             hotkey_backend=values.get("VOICE_INPUT_HOTKEY_BACKEND", "auto").lower(),
             hotkey_key=values.get("VOICE_INPUT_HOTKEY_KEY", "right_alt"),
             evdev_device=values.get("VOICE_INPUT_EVDEV_DEVICE", ""),
@@ -237,6 +264,38 @@ class AppConfig:
                 result[field] = value
         return result
 
+    def effective_doubao_endpoint(self) -> str:
+        return doubao_endpoint_for_mode(self.doubao_mode) or self.doubao_endpoint
+
+    def effective_doubao_enable_nonstream(self) -> bool:
+        if self.doubao_mode == DOUBAO_MODE_REALTIME_FINAL:
+            return True
+        if self.doubao_mode in {DOUBAO_MODE_REALTIME, DOUBAO_MODE_STREAM_INPUT}:
+            return False
+        return self.doubao_enable_nonstream
+
+
+def doubao_endpoint_for_mode(mode: str) -> str:
+    if mode in {DOUBAO_MODE_REALTIME_FINAL, DOUBAO_MODE_REALTIME}:
+        return DOUBAO_ENDPOINT_REALTIME
+    if mode == DOUBAO_MODE_STREAM_INPUT:
+        return DOUBAO_ENDPOINT_STREAM_INPUT
+    return ""
+
+
+def _get_doubao_mode(values: Mapping[str, str]) -> str:
+    configured = values.get("DOUBAO_ASR_MODE", "").strip().lower()
+    if configured in DOUBAO_MODES:
+        return configured
+
+    endpoint = values.get("DOUBAO_ASR_ENDPOINT", DEFAULT_DOUBAO_ENDPOINT).strip()
+    enable_nonstream = _get_bool(values, "DOUBAO_ASR_ENABLE_NONSTREAM", True)
+    if endpoint == DOUBAO_ENDPOINT_STREAM_INPUT:
+        return DOUBAO_MODE_STREAM_INPUT
+    if endpoint == DOUBAO_ENDPOINT_REALTIME:
+        return DOUBAO_MODE_REALTIME_FINAL if enable_nonstream else DOUBAO_MODE_REALTIME
+    return DOUBAO_MODE_CUSTOM
+
 
 def load_config(
     env_file: str | Path | None = None,
@@ -257,12 +316,17 @@ def config_to_env(config: AppConfig) -> dict[str, str]:
     return {
         "VOICE_INPUT_ASR": config.asr_provider,
         "VOICE_INPUT_MOCK_TEXT": config.mock_text,
-        "DOUBAO_ASR_ENDPOINT": config.doubao_endpoint,
+        "DOUBAO_ASR_ENDPOINT": config.effective_doubao_endpoint(),
         "DOUBAO_ASR_APP_KEY": config.doubao_app_key,
         "DOUBAO_ASR_ACCESS_KEY": config.doubao_access_key,
         "DOUBAO_ASR_ACCESS_TOKEN": config.doubao_access_key,
         "DOUBAO_ASR_RESOURCE_ID": config.doubao_resource_id,
         "DOUBAO_ASR_PROTOCOL": config.doubao_protocol,
+        "DOUBAO_ASR_MODE": config.doubao_mode,
+        "DOUBAO_ASR_ENABLE_PUNC": "true" if config.doubao_enable_punc else "false",
+        "DOUBAO_ASR_ENABLE_ITN": "true" if config.doubao_enable_itn else "false",
+        "DOUBAO_ASR_ENABLE_DDC": "true" if config.doubao_enable_ddc else "false",
+        "DOUBAO_ASR_ENABLE_NONSTREAM": "true" if config.effective_doubao_enable_nonstream() else "false",
         "VOICE_INPUT_HOTKEY_BACKEND": config.hotkey_backend,
         "VOICE_INPUT_HOTKEY_KEY": config.hotkey_key,
         "VOICE_INPUT_EVDEV_KEY": config.evdev_key,

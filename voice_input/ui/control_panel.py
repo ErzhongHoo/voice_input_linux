@@ -31,7 +31,15 @@ from PySide6.QtWidgets import (
 )
 
 from voice_input.audio.devices import InputDeviceInfo, list_input_devices
-from voice_input.config import AppConfig, config_to_env
+from voice_input.config import (
+    DOUBAO_MODE_CUSTOM,
+    DOUBAO_MODE_REALTIME,
+    DOUBAO_MODE_REALTIME_FINAL,
+    DOUBAO_MODE_STREAM_INPUT,
+    AppConfig,
+    config_to_env,
+    doubao_endpoint_for_mode,
+)
 from voice_input.history import HistoryEntry
 from voice_input.installer import (
     install_desktop,
@@ -58,7 +66,7 @@ class ControlPanel(QWidget):
         on_environment: Callable[[], None],
         on_clear_history: Callable[[], None],
         on_quit: Callable[[], None],
-        on_save_settings: Callable[[dict[str, str]], None] | None = None,
+        on_save_settings: Callable[[dict[str, str]], bool | None] | None = None,
         history_entries: list[HistoryEntry] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -71,6 +79,7 @@ class ControlPanel(QWidget):
         self._on_save_settings = on_save_settings
         self._recording = False
         self._sidebar_collapsed = False
+        self._syncing_settings = False
         self._nav_buttons: list[QPushButton] = []
 
         self.setObjectName("ControlPanel")
@@ -98,10 +107,8 @@ class ControlPanel(QWidget):
         self.desktop_button.setObjectName("SecondaryButton")
         self.clear_history_button = QPushButton("清空历史")
         self.clear_history_button.setObjectName("SecondaryButton")
-        self.save_model_button = QPushButton("保存模型")
-        self.save_model_button.setObjectName("PrimaryButton")
-        self.save_settings_button = QPushButton("保存设置")
-        self.save_settings_button.setObjectName("PrimaryButton")
+        self.model_save_status = self._pill("已保存", "muted")
+        self.settings_save_status = self._pill("已保存", "muted")
         self.copy_toggle_button = QPushButton("复制")
         self.copy_toggle_button.setObjectName("SecondaryButton")
         self.prepare_wayland_button = QPushButton("安装并启动后台服务")
@@ -116,16 +123,20 @@ class ControlPanel(QWidget):
         self.history_list.setAlternatingRowColors(True)
         self._create_settings_fields()
 
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.setInterval(700)
+        self._auto_save_timer.timeout.connect(self._auto_save_settings)
+
         self._set_button_icons()
         self.environment_button.clicked.connect(self._on_environment)
         self.autostart_button.clicked.connect(self._toggle_autostart)
         self.desktop_button.clicked.connect(self._toggle_desktop_entry)
         self.history_list.itemClicked.connect(self._copy_history_item)
         self.clear_history_button.clicked.connect(self._clear_history)
-        self.save_model_button.clicked.connect(self._save_model_settings)
-        self.save_settings_button.clicked.connect(self._save_desktop_settings)
         self.copy_toggle_button.clicked.connect(self._copy_toggle_command)
         self.prepare_wayland_button.clicked.connect(self._prepare_wayland_shortcut)
+        self._connect_auto_save_fields()
 
         self.pages = QStackedWidget()
         self.pages.setObjectName("ContentStack")
@@ -284,7 +295,7 @@ class ControlPanel(QWidget):
 
         frame = self._section("模型")
         frame.layout().addLayout(self._model_form())
-        frame.layout().addWidget(self.save_model_button, alignment=Qt.AlignmentFlag.AlignRight)
+        frame.layout().addWidget(self.model_save_status, alignment=Qt.AlignmentFlag.AlignRight)
 
         layout.addWidget(frame)
         layout.addStretch(1)
@@ -383,16 +394,26 @@ class ControlPanel(QWidget):
     def _desktop_form_section(self) -> QFrame:
         frame = self._section("设置")
         frame.layout().addLayout(self._desktop_form())
-        frame.layout().addWidget(self.save_settings_button, alignment=Qt.AlignmentFlag.AlignRight)
+        frame.layout().addWidget(self.settings_save_status, alignment=Qt.AlignmentFlag.AlignRight)
         return frame
 
     def _create_settings_fields(self) -> None:
         self.asr_provider_input = NoWheelComboBox()
         self.asr_provider_input.addItem("豆包 ASR", "doubao")
+        self.doubao_mode_input = NoWheelComboBox()
+        self.doubao_mode_input.addItem("实时 + 二遍识别（推荐）", DOUBAO_MODE_REALTIME_FINAL)
+        self.doubao_mode_input.addItem("实时逐字", DOUBAO_MODE_REALTIME)
+        self.doubao_mode_input.addItem("整句返回（更稳，慢一点）", DOUBAO_MODE_STREAM_INPUT)
+        self.doubao_mode_input.addItem("自定义 Endpoint", DOUBAO_MODE_CUSTOM)
+        self.doubao_mode_input.currentIndexChanged.connect(self._handle_doubao_mode_changed)
         self.endpoint_input = QLineEdit()
         self.app_key_input = SecretField()
         self.access_key_input = SecretField()
         self.resource_id_input = QLineEdit()
+        self.doubao_enable_punc_input = QCheckBox("模型自动标点")
+        self.doubao_enable_itn_input = QCheckBox("数字规整 ITN")
+        self.doubao_enable_ddc_input = QCheckBox("语义顺滑")
+        self.doubao_enable_nonstream_input = QCheckBox("二遍识别")
         self.input_device_combo = NoWheelComboBox()
         self.input_device_combo.setEditable(True)
         self.input_device_combo.setMinimumWidth(380)
@@ -438,7 +459,7 @@ class ControlPanel(QWidget):
         self.paste_at_mouse_input = QCheckBox("识别结束后先点击当前鼠标位置，再粘贴")
         self.paste_hotkey_input = NoWheelComboBox()
         self.paste_hotkey_input.addItems(["ctrl+v", "ctrl+shift+v", "shift+insert"])
-        self.append_final_punctuation_input = QCheckBox("自动补句号")
+        self.append_final_punctuation_input = QCheckBox("应用自动补句号")
         self.overlay_theme_input = NoWheelComboBox()
         self.overlay_theme_input.addItems(["auto", "light", "dark"])
         self.log_level_input = NoWheelComboBox()
@@ -454,10 +475,15 @@ class ControlPanel(QWidget):
         form.setVerticalSpacing(10)
         form.addRow("识别服务", self.asr_provider_input)
         form.addRow(_separator("豆包 / 火山引擎"))
+        form.addRow("识别模式", self.doubao_mode_input)
         form.addRow("Endpoint", self.endpoint_input)
         form.addRow("App Key", self.app_key_input)
         form.addRow("Access Key / Token", self.access_key_input)
         form.addRow("Resource ID", self.resource_id_input)
+        form.addRow("", self.doubao_enable_punc_input)
+        form.addRow("", self.doubao_enable_itn_input)
+        form.addRow("", self.doubao_enable_ddc_input)
+        form.addRow("", self.doubao_enable_nonstream_input)
         return form
 
     def _desktop_form(self) -> QFormLayout:
@@ -652,29 +678,39 @@ class ControlPanel(QWidget):
         self.input_device_combo.setEditText(value)
 
     def _sync_config_fields(self, config: AppConfig) -> None:
-        _set_combo_data(self.asr_provider_input, "doubao")
-        self.endpoint_input.setText(config.doubao_endpoint)
-        self.app_key_input.setText(config.doubao_app_key)
-        self.access_key_input.setText(config.doubao_access_key)
-        self.resource_id_input.setText(config.doubao_resource_id)
-        self._set_selected_input_device(config.input_device)
-        self.sample_rate_input.setValue(config.sample_rate)
-        self.channels_input.setValue(config.channels)
-        self.chunk_ms_input.setValue(config.chunk_ms)
-        self.hotkey_backend_input.setCurrentText(config.hotkey_backend)
-        self.hotkey_key_input.setText(config.hotkey_key)
-        self.evdev_key_input.setText(config.evdev_key)
-        self.evdev_device_input.setText(config.evdev_device)
-        self.injector_backend_input.setCurrentText(config.injector_backend)
-        self.prefer_fcitx5_input.setChecked(config.prefer_fcitx5)
-        self.paste_at_mouse_input.setChecked(config.paste_at_mouse)
-        if config.paste_hotkey not in {"ctrl+v", "ctrl+shift+v", "shift+insert"}:
-            self.paste_hotkey_input.addItem(config.paste_hotkey)
-        self.paste_hotkey_input.setCurrentText(config.paste_hotkey)
-        self.append_final_punctuation_input.setChecked(config.append_final_punctuation)
-        self.overlay_theme_input.setCurrentText(config.overlay_theme)
-        self.log_level_input.setCurrentText(config.log_level)
-        self.toggle_command_input.setText(toggle_command_text())
+        self._syncing_settings = True
+        try:
+            _set_combo_data(self.asr_provider_input, "doubao")
+            _set_combo_data(self.doubao_mode_input, config.doubao_mode)
+            self.endpoint_input.setText(config.effective_doubao_endpoint())
+            self.app_key_input.setText(config.doubao_app_key)
+            self.access_key_input.setText(config.doubao_access_key)
+            self.resource_id_input.setText(config.doubao_resource_id)
+            self.doubao_enable_punc_input.setChecked(config.doubao_enable_punc)
+            self.doubao_enable_itn_input.setChecked(config.doubao_enable_itn)
+            self.doubao_enable_ddc_input.setChecked(config.doubao_enable_ddc)
+            self.doubao_enable_nonstream_input.setChecked(config.effective_doubao_enable_nonstream())
+            self._handle_doubao_mode_changed()
+            self._set_selected_input_device(config.input_device)
+            self.sample_rate_input.setValue(config.sample_rate)
+            self.channels_input.setValue(config.channels)
+            self.chunk_ms_input.setValue(config.chunk_ms)
+            self.hotkey_backend_input.setCurrentText(config.hotkey_backend)
+            self.hotkey_key_input.setText(config.hotkey_key)
+            self.evdev_key_input.setText(config.evdev_key)
+            self.evdev_device_input.setText(config.evdev_device)
+            self.injector_backend_input.setCurrentText(config.injector_backend)
+            self.prefer_fcitx5_input.setChecked(config.prefer_fcitx5)
+            self.paste_at_mouse_input.setChecked(config.paste_at_mouse)
+            if config.paste_hotkey not in {"ctrl+v", "ctrl+shift+v", "shift+insert"}:
+                self.paste_hotkey_input.addItem(config.paste_hotkey)
+            self.paste_hotkey_input.setCurrentText(config.paste_hotkey)
+            self.append_final_punctuation_input.setChecked(config.append_final_punctuation)
+            self.overlay_theme_input.setCurrentText(config.overlay_theme)
+            self.log_level_input.setCurrentText(config.log_level)
+            self.toggle_command_input.setText(toggle_command_text())
+        finally:
+            self._syncing_settings = False
 
     def _settings_config(self) -> AppConfig:
         return AppConfig(
@@ -685,6 +721,11 @@ class ControlPanel(QWidget):
             doubao_access_key=self.access_key_input.text().strip(),
             doubao_resource_id=self.resource_id_input.text().strip(),
             doubao_protocol=self.config.doubao_protocol,
+            doubao_mode=str(self.doubao_mode_input.currentData() or DOUBAO_MODE_REALTIME_FINAL),
+            doubao_enable_punc=self.doubao_enable_punc_input.isChecked(),
+            doubao_enable_itn=self.doubao_enable_itn_input.isChecked(),
+            doubao_enable_ddc=self.doubao_enable_ddc_input.isChecked(),
+            doubao_enable_nonstream=self.doubao_enable_nonstream_input.isChecked(),
             hotkey_backend=self.hotkey_backend_input.currentText(),
             hotkey_key=self.hotkey_key_input.text().strip() or "right_alt",
             evdev_device=self.evdev_device_input.text().strip(),
@@ -704,35 +745,83 @@ class ControlPanel(QWidget):
             config_file=self.config_path.text().strip() or self.config.config_file,
         )
 
-    def _save_model_settings(self) -> None:
-        if not self._validate_model_fields():
+    def _connect_auto_save_fields(self) -> None:
+        text_fields = [
+            self.endpoint_input,
+            self.app_key_input.line,
+            self.access_key_input.line,
+            self.resource_id_input,
+            self.hotkey_key_input,
+            self.evdev_key_input,
+            self.evdev_device_input,
+        ]
+        for field in text_fields:
+            field.textEdited.connect(self._schedule_auto_save)
+
+        combo_fields = [
+            self.asr_provider_input,
+            self.doubao_mode_input,
+            self.input_device_combo,
+            self.hotkey_backend_input,
+            self.injector_backend_input,
+            self.paste_hotkey_input,
+            self.overlay_theme_input,
+            self.log_level_input,
+        ]
+        for combo in combo_fields:
+            combo.currentIndexChanged.connect(self._schedule_auto_save)
+        self.input_device_combo.editTextChanged.connect(self._schedule_auto_save)
+
+        spin_fields = [self.sample_rate_input, self.channels_input, self.chunk_ms_input]
+        for spin in spin_fields:
+            spin.valueChanged.connect(self._schedule_auto_save)
+
+        check_fields = [
+            self.doubao_enable_punc_input,
+            self.doubao_enable_itn_input,
+            self.doubao_enable_ddc_input,
+            self.doubao_enable_nonstream_input,
+            self.prefer_fcitx5_input,
+            self.paste_at_mouse_input,
+            self.append_final_punctuation_input,
+        ]
+        for field in check_fields:
+            field.toggled.connect(self._schedule_auto_save)
+
+    def _schedule_auto_save(self) -> None:
+        if self._syncing_settings:
             return
-        self._save_settings()
+        self._set_auto_save_status("待保存", "info")
+        self._auto_save_timer.start()
 
-    def _save_desktop_settings(self) -> None:
-        self._save_settings()
+    def _handle_doubao_mode_changed(self) -> None:
+        mode = str(self.doubao_mode_input.currentData() or DOUBAO_MODE_REALTIME_FINAL)
+        endpoint = doubao_endpoint_for_mode(mode)
+        if endpoint:
+            self.endpoint_input.setText(endpoint)
+        self.endpoint_input.setReadOnly(mode != DOUBAO_MODE_CUSTOM)
+        if mode == DOUBAO_MODE_REALTIME_FINAL:
+            self.doubao_enable_nonstream_input.setChecked(True)
+        elif mode in {DOUBAO_MODE_REALTIME, DOUBAO_MODE_STREAM_INPUT}:
+            self.doubao_enable_nonstream_input.setChecked(False)
+        self.doubao_enable_nonstream_input.setEnabled(mode == DOUBAO_MODE_CUSTOM)
+        self._schedule_auto_save()
 
-    def _save_settings(self) -> None:
+    def _auto_save_settings(self) -> None:
         if self._on_save_settings is None:
             self._on_settings()
             return
         settings = self._settings_config()
         env = config_to_env(settings)
         env["VOICE_INPUT_CONFIG_FILE"] = settings.config_file
-        self._on_save_settings(env)
+        env["_VOICE_INPUT_SAVE_NOTIFICATION"] = "false"
+        self._set_auto_save_status("保存中", "info")
+        saved = self._on_save_settings(env)
+        self._set_auto_save_status("已保存", "muted" if saved is not False else "warn")
 
-    def _validate_model_fields(self) -> bool:
-        missing = []
-        if not self.endpoint_input.text().strip():
-            missing.append("Endpoint")
-        if not self.app_key_input.text().strip():
-            missing.append("App Key")
-        if not self.access_key_input.text().strip():
-            missing.append("Access Key")
-        if missing:
-            QMessageBox.warning(self, "模型配置不完整", "豆包 ASR 缺少: " + ", ".join(missing))
-            return False
-        return True
+    def _set_auto_save_status(self, text: str, state: str) -> None:
+        self._set_pill(self.model_save_status, text, state)
+        self._set_pill(self.settings_save_status, text, state)
 
     def _copy_toggle_command(self) -> None:
         try:
@@ -869,8 +958,6 @@ class ControlPanel(QWidget):
             (self.autostart_button, QStyle.StandardPixmap.SP_ComputerIcon),
             (self.desktop_button, QStyle.StandardPixmap.SP_DirHomeIcon),
             (self.clear_history_button, QStyle.StandardPixmap.SP_DialogResetButton),
-            (self.save_model_button, QStyle.StandardPixmap.SP_DialogSaveButton),
-            (self.save_settings_button, QStyle.StandardPixmap.SP_DialogSaveButton),
             (self.copy_toggle_button, QStyle.StandardPixmap.SP_FileDialogContentsView),
             (self.prepare_wayland_button, QStyle.StandardPixmap.SP_DialogApplyButton),
             (self.refresh_input_devices, QStyle.StandardPixmap.SP_BrowserReload),

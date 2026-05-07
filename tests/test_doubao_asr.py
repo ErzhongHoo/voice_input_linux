@@ -42,3 +42,25 @@ def test_start_payload_uses_full_result_type() -> None:
     assert payload["request"]["model_name"] == "bigmodel"
     assert payload["request"]["result_type"] == "full"
     assert payload["request"]["show_utterances"] is True
+    assert payload["request"]["enable_punc"] is True
+    assert payload["request"]["enable_itn"] is True
+    assert payload["request"]["enable_ddc"] is False
+    assert payload["request"]["enable_nonstream"] is True
+
+
+def test_start_payload_uses_configured_request_options() -> None:
+    client = DoubaoBigASRClient(
+        endpoint="wss://example.test",
+        app_key="app",
+        access_key="access",
+        resource_id="volc.seedasr.sauc.duration",
+        enable_punc=False,
+        enable_itn=False,
+        enable_ddc=True,
+        enable_nonstream=False,
+    )
+    payload = client._build_start_payload()
+    assert payload["request"]["enable_punc"] is False
+    assert payload["request"]["enable_itn"] is False
+    assert payload["request"]["enable_ddc"] is True
+    assert payload["request"]["enable_nonstream"] is False

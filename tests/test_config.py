@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from voice_input.config import ensure_config_file, load_config, read_env_file, write_env_file
+from voice_input.config import (
+    DOUBAO_ENDPOINT_STREAM_INPUT,
+    DOUBAO_MODE_REALTIME,
+    DOUBAO_MODE_REALTIME_FINAL,
+    DOUBAO_MODE_STREAM_INPUT,
+    ensure_config_file,
+    load_config,
+    read_env_file,
+    write_env_file,
+)
 
 
 def test_read_env_file(tmp_path: Path) -> None:
@@ -39,10 +48,17 @@ def test_default_doubao_config_uses_streaming_asr_2(tmp_path: Path) -> None:
     env.write_text("", encoding="utf-8")
     config = load_config(env, {})
     assert config.doubao_endpoint == "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+    assert config.effective_doubao_endpoint() == "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
     assert config.doubao_resource_id == "volc.seedasr.sauc.duration"
+    assert config.doubao_mode == DOUBAO_MODE_REALTIME_FINAL
     assert config.paste_at_mouse is True
     assert config.paste_hotkey == "ctrl+v"
     assert config.append_final_punctuation is True
+    assert config.doubao_enable_punc is True
+    assert config.doubao_enable_itn is True
+    assert config.doubao_enable_ddc is False
+    assert config.doubao_enable_nonstream is True
+    assert config.effective_doubao_enable_nonstream() is True
 
 
 def test_load_config_paste_hotkey(tmp_path: Path) -> None:
@@ -57,6 +73,38 @@ def test_load_config_append_final_punctuation(tmp_path: Path) -> None:
     env.write_text("VOICE_INPUT_APPEND_FINAL_PUNCTUATION=false\n", encoding="utf-8")
     config = load_config(env, {})
     assert config.append_final_punctuation is False
+
+
+def test_load_config_doubao_request_options(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "\n".join(
+            [
+                "DOUBAO_ASR_ENABLE_PUNC=false",
+                "DOUBAO_ASR_ENABLE_ITN=false",
+                "DOUBAO_ASR_ENABLE_DDC=true",
+                "DOUBAO_ASR_ENABLE_NONSTREAM=false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config = load_config(env, {})
+    assert config.doubao_enable_punc is False
+    assert config.doubao_enable_itn is False
+    assert config.doubao_enable_ddc is True
+    assert config.doubao_enable_nonstream is False
+    assert config.doubao_mode == DOUBAO_MODE_REALTIME
+    assert config.effective_doubao_enable_nonstream() is False
+
+
+def test_load_config_doubao_stream_input_mode(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("DOUBAO_ASR_MODE=stream_input\n", encoding="utf-8")
+    config = load_config(env, {})
+    assert config.doubao_mode == DOUBAO_MODE_STREAM_INPUT
+    assert config.effective_doubao_endpoint() == DOUBAO_ENDPOINT_STREAM_INPUT
+    assert config.effective_doubao_enable_nonstream() is False
 
 
 def test_write_env_file_preserves_comments(tmp_path: Path) -> None:
@@ -86,3 +134,6 @@ def test_ensure_config_file_creates_default(tmp_path: Path) -> None:
     assert "VOICE_INPUT_ASR=mock" in text
     assert "VOICE_INPUT_PASTE_HOTKEY=ctrl+v" in text
     assert "VOICE_INPUT_APPEND_FINAL_PUNCTUATION=true" in text
+    assert "DOUBAO_ASR_MODE=realtime_final" in text
+    assert "DOUBAO_ASR_ENABLE_PUNC=true" in text
+    assert "DOUBAO_ASR_ENABLE_NONSTREAM=true" in text
