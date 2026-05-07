@@ -16,7 +16,7 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.ezhonghu.openshandianshuo.voiceinputlinux.desktop</launchable>
-  <url type="homepage">https://github.com</url>
+  <url type="homepage">https://github.com/ezhonghu/openShanDianShuo</url>
   <content_rating type="oars-1.1"/>
   <provides>
     <binary>voice-input-linux</binary>

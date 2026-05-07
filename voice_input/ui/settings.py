@@ -108,7 +108,8 @@ class SettingsDialog(QDialog):
         if config.paste_hotkey not in {"ctrl+v", "ctrl+shift+v", "shift+insert"}:
             self.paste_hotkey.addItem(config.paste_hotkey)
         self.paste_hotkey.setCurrentText(config.paste_hotkey)
-        self.append_final_punctuation = QCheckBox("应用自动补句号")
+        self.append_final_punctuation = QCheckBox("保留/补末尾句号")
+        self.append_final_punctuation.setToolTip("关闭后会删除 ASR 返回的最终句号，也不会自动补句号。")
         self.append_final_punctuation.setChecked(config.append_final_punctuation)
         self.toggle_command = QLineEdit(toggle_command_text())
         self.toggle_command.setReadOnly(True)
@@ -117,14 +118,14 @@ class SettingsDialog(QDialog):
         self.prepare_wayland_button = QPushButton("安装并启动后台服务")
         self.prepare_wayland_button.clicked.connect(self._prepare_wayland_shortcut)
 
-        self.sample_rate = QSpinBox()
+        self.sample_rate = NoWheelSpinBox()
         self.sample_rate.setRange(8000, 96000)
         self.sample_rate.setSingleStep(1000)
         self.sample_rate.setValue(config.sample_rate)
-        self.channels = QSpinBox()
+        self.channels = NoWheelSpinBox()
         self.channels.setRange(1, 2)
         self.channels.setValue(config.channels)
-        self.chunk_ms = QSpinBox()
+        self.chunk_ms = NoWheelSpinBox()
         self.chunk_ms.setRange(20, 1000)
         self.chunk_ms.setSingleStep(20)
         self.chunk_ms.setValue(config.chunk_ms)
@@ -313,7 +314,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.prefer_fcitx5)
         form.addRow("", self.paste_at_mouse)
         form.addRow("粘贴快捷键", self.paste_hotkey)
-        form.addRow("末尾标点", self.append_final_punctuation)
+        form.addRow("末尾句号", self.append_final_punctuation)
         form.addRow(_separator("Wayland 快捷键"))
         note = QLabel("把 toggle 命令绑定到系统或 compositor 的全局快捷键；后台服务需要先运行。")
         note.setWordWrap(True)
@@ -554,6 +555,11 @@ class SecretLineEdit(QWidget):
 
 
 class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         event.ignore()
 

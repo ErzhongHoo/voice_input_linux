@@ -15,6 +15,8 @@ class TextPostProcessor:
         value = self._normalize_punctuation(value)
         if self.append_final_punctuation:
             value = self._ensure_sentence_punctuation(value)
+        else:
+            value = self._strip_final_period(value)
         return value.strip()
 
     def _remove_fillers(self, text: str) -> str:
@@ -51,6 +53,21 @@ class TextPostProcessor:
             return value
         return value + ("。" if _contains_cjk(value) else ".")
 
+    def _strip_final_period(self, text: str) -> str:
+        value = text.strip()
+        if not value:
+            return ""
+        index = len(value) - 1
+        while index >= 0 and value[index] in _TRAILING_CLOSERS:
+            index -= 1
+        if index >= 0 and value[index] in _FINAL_PERIODS:
+            value = value[:index] + value[index + 1 :]
+        return value
+
 
 def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u3400-\u9fff]", text))
+
+
+_FINAL_PERIODS = {"。", ".", "．"}
+_TRAILING_CLOSERS = set("\"'”’）)]】》」』")

@@ -6,7 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "voice-input-linux"
 version = "0.1.0"
 description = "Linux desktop dictation service with global hotkey and ASR streaming"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "openShanDianShuo contributors" },
+]
 dependencies = [
   "PySide6>=6.6",
   "sounddevice>=0.4.6",
@@ -17,6 +22,11 @@ dependencies = [
   "dbus-next>=0.2.3",
   "pyperclip>=1.8",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ezhonghu/openShanDianShuo"
+Repository = "https://github.com/ezhonghu/openShanDianShuo"
+Issues = "https://github.com/ezhonghu/openShanDianShuo/issues"
 
 [project.scripts]
 voice-input-linux = "voice_input.main:main"
