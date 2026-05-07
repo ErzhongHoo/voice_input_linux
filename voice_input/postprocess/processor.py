@@ -4,13 +4,17 @@ import re
 
 
 class TextPostProcessor:
+    def __init__(self, append_final_punctuation: bool = True) -> None:
+        self.append_final_punctuation = append_final_punctuation
+
     def process(self, text: str) -> str:
         value = text.strip()
         if not value:
             return ""
         value = self._remove_fillers(value)
         value = self._normalize_punctuation(value)
-        value = self._ensure_sentence_punctuation(value)
+        if self.append_final_punctuation:
+            value = self._ensure_sentence_punctuation(value)
         return value.strip()
 
     def _remove_fillers(self, text: str) -> str:
@@ -50,4 +54,3 @@ class TextPostProcessor:
 
 def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u3400-\u9fff]", text))
-

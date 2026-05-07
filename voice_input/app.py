@@ -201,7 +201,7 @@ class VoiceInputApp:
             chunk_ms=config.chunk_ms,
             device=config.input_device or None,
         )
-        self.postprocessor = TextPostProcessor()
+        self.postprocessor = TextPostProcessor(append_final_punctuation=config.append_final_punctuation)
         self.injector: TextInjectorBackend = build_text_injector(config)
         self.history_entries = load_history()
         self.overlay = OverlayWindow(theme=config.overlay_theme)
@@ -482,6 +482,7 @@ class VoiceInputApp:
             chunk_ms=new_config.chunk_ms,
             device=new_config.input_device or None,
         )
+        self.postprocessor = TextPostProcessor(append_final_punctuation=new_config.append_final_punctuation)
         self.injector = build_text_injector(new_config)
         if self.hotkey:
             self.hotkey.stop()

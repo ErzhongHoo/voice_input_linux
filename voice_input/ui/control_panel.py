@@ -211,7 +211,7 @@ class ControlPanel(QWidget):
         self._set_pill(self.autostart_status, service_text, service_state)
         self.autostart_button.setText("关闭自启动" if service_enabled or service_installed else "开启自启动")
         self._set_pill(self.desktop_status, "已安装" if desktop_installed else "未安装", "ok" if desktop_installed else "muted")
-        self.desktop_button.setText("移除桌面入口" if desktop_installed else "安装桌面入口")
+        self.desktop_button.setText("移除桌面图标" if desktop_installed else "安装桌面图标")
 
     def _sidebar(self) -> QFrame:
         frame = QFrame()
@@ -368,7 +368,7 @@ class ControlPanel(QWidget):
         rows = [
             ("环境检查", None, self.environment_button),
             ("自启动", self.autostart_status, self.autostart_button),
-            ("桌面入口", self.desktop_status, self.desktop_button),
+            ("桌面图标", self.desktop_status, self.desktop_button),
         ]
         for row, (name, status, button) in enumerate(rows):
             grid.addWidget(self._field_label(name), row, 0)
@@ -438,6 +438,7 @@ class ControlPanel(QWidget):
         self.paste_at_mouse_input = QCheckBox("识别结束后先点击当前鼠标位置，再粘贴")
         self.paste_hotkey_input = NoWheelComboBox()
         self.paste_hotkey_input.addItems(["ctrl+v", "ctrl+shift+v", "shift+insert"])
+        self.append_final_punctuation_input = QCheckBox("自动补句号")
         self.overlay_theme_input = NoWheelComboBox()
         self.overlay_theme_input.addItems(["auto", "light", "dark"])
         self.log_level_input = NoWheelComboBox()
@@ -480,6 +481,7 @@ class ControlPanel(QWidget):
         form.addRow("", self.prefer_fcitx5_input)
         form.addRow("", self.paste_at_mouse_input)
         form.addRow("粘贴快捷键", self.paste_hotkey_input)
+        form.addRow("末尾标点", self.append_final_punctuation_input)
         form.addRow(_separator("Wayland 快捷键"))
         form.addRow("toggle 命令", self._toggle_command_row())
         form.addRow("", self.prepare_wayland_button)
@@ -669,6 +671,7 @@ class ControlPanel(QWidget):
         if config.paste_hotkey not in {"ctrl+v", "ctrl+shift+v", "shift+insert"}:
             self.paste_hotkey_input.addItem(config.paste_hotkey)
         self.paste_hotkey_input.setCurrentText(config.paste_hotkey)
+        self.append_final_punctuation_input.setChecked(config.append_final_punctuation)
         self.overlay_theme_input.setCurrentText(config.overlay_theme)
         self.log_level_input.setCurrentText(config.log_level)
         self.toggle_command_input.setText(toggle_command_text())
@@ -690,6 +693,7 @@ class ControlPanel(QWidget):
             prefer_fcitx5=self.prefer_fcitx5_input.isChecked(),
             paste_at_mouse=self.paste_at_mouse_input.isChecked(),
             paste_hotkey=self.paste_hotkey_input.currentText(),
+            append_final_punctuation=self.append_final_punctuation_input.isChecked(),
             sample_rate=self.sample_rate_input.value(),
             channels=self.channels_input.value(),
             chunk_ms=self.chunk_ms_input.value(),
@@ -797,16 +801,16 @@ class ControlPanel(QWidget):
         try:
             if is_desktop_installed():
                 status = uninstall_desktop()
-                action = "移除桌面入口"
+                action = "移除桌面图标"
             else:
                 status = install_desktop()
-                action = "安装桌面入口"
+                action = "安装桌面图标"
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "桌面入口设置失败", str(exc))
+            QMessageBox.critical(self, "桌面图标设置失败", str(exc))
             return
         self.refresh_installation_status()
         if status != 0:
-            QMessageBox.warning(self, "桌面入口设置失败", f"{action}失败，退出码: {status}")
+            QMessageBox.warning(self, "桌面图标设置失败", f"{action}失败，退出码: {status}")
 
     def _copy_history_item(self, item: QListWidgetItem) -> None:
         text = item.data(Qt.ItemDataRole.UserRole)
@@ -954,10 +958,11 @@ class ControlPanel(QWidget):
                 color: {muted};
             }}
             QLabel#SeparatorLabel {{
-                color: {text};
-                font-size: 12px;
-                font-weight: 700;
-                padding-top: 10px;
+                color: {muted};
+                font-size: 13px;
+                font-weight: 600;
+                padding-top: 8px;
+                padding-bottom: 2px;
             }}
             QFrame#SectionFrame {{
                 background: {panel};
@@ -966,8 +971,9 @@ class ControlPanel(QWidget):
             }}
             QLabel#SectionTitle {{
                 color: {text};
-                font-size: 13px;
+                font-size: 16px;
                 font-weight: 700;
+                min-height: 24px;
             }}
             QLabel#StatusPill {{
                 border-radius: 12px;

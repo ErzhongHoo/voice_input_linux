@@ -65,33 +65,57 @@ def uninstall_service(stop: bool = True) -> int:
 def install_desktop() -> int:
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     applications_dir = applications_path()
-    icons_dir = data_home / "icons" / "hicolor" / "scalable" / "apps"
+    hicolor_dir = data_home / "icons" / "hicolor"
+    scalable_icons_dir = hicolor_dir / "scalable" / "apps"
+    png_icons_dir = hicolor_dir / "256x256" / "apps"
+    svg_icon_target = scalable_icons_dir / f"{APP_ID}.svg"
+    png_icon_target = png_icons_dir / f"{APP_ID}.png"
     applications_dir.mkdir(parents=True, exist_ok=True)
-    icons_dir.mkdir(parents=True, exist_ok=True)
+    scalable_icons_dir.mkdir(parents=True, exist_ok=True)
+    png_icons_dir.mkdir(parents=True, exist_ok=True)
 
+    entry = _desktop_entry()
     desktop_path = desktop_entry_path()
-    desktop_path.write_text(_desktop_entry(), encoding="utf-8")
+    desktop_path.write_text(entry, encoding="utf-8")
     desktop_path.chmod(0o755)
 
     with as_file(files("voice_input.resources").joinpath(f"{APP_ID}.svg")) as icon_path:
-        shutil.copy2(icon_path, icons_dir / f"{APP_ID}.svg")
+        shutil.copy2(icon_path, svg_icon_target)
+    with as_file(files("voice_input.resources").joinpath(f"{APP_ID}.png")) as icon_path:
+        shutil.copy2(icon_path, png_icon_target)
+
+    shortcut_path = desktop_shortcut_path()
+    shortcut_path.parent.mkdir(parents=True, exist_ok=True)
+    shortcut_path.write_text(entry, encoding="utf-8")
+    shortcut_path.chmod(0o755)
+    _run(["gio", "set", str(shortcut_path), "metadata::trusted", "true"], check=False)
 
     _run(["update-desktop-database", str(applications_dir)], check=False)
-    _run(["gtk-update-icon-cache", "-q", str(data_home / "icons" / "hicolor")], check=False)
-    print(f"已安装桌面入口: {desktop_path}")
+    if (hicolor_dir / "index.theme").exists():
+        _run(["gtk-update-icon-cache", "-q", str(hicolor_dir)], check=False)
+    _run(["xdg-icon-resource", "forceupdate", "--theme", "hicolor"], check=False)
+    _run(["kbuildsycoca6", "--noincremental"], check=False)
+    print(f"已安装应用菜单入口: {desktop_path}")
+    print(f"已安装桌面快捷方式: {shortcut_path}")
     return 0
 
 
 def uninstall_desktop() -> int:
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    hicolor_dir = data_home / "icons" / "hicolor"
     desktop_path = desktop_entry_path()
-    icon_path = data_home / "icons" / "hicolor" / "scalable" / "apps" / f"{APP_ID}.svg"
-    for path in (desktop_path, icon_path):
+    shortcut_path = desktop_shortcut_path()
+    svg_icon_path = hicolor_dir / "scalable" / "apps" / f"{APP_ID}.svg"
+    png_icon_path = hicolor_dir / "256x256" / "apps" / f"{APP_ID}.png"
+    for path in (desktop_path, shortcut_path, svg_icon_path, png_icon_path):
         if path.exists():
             path.unlink()
     _run(["update-desktop-database", str(data_home / "applications")], check=False)
-    _run(["gtk-update-icon-cache", "-q", str(data_home / "icons" / "hicolor")], check=False)
-    print("已移除桌面入口和图标")
+    if (hicolor_dir / "index.theme").exists():
+        _run(["gtk-update-icon-cache", "-q", str(hicolor_dir)], check=False)
+    _run(["xdg-icon-resource", "forceupdate", "--theme", "hicolor"], check=False)
+    _run(["kbuildsycoca6", "--noincremental"], check=False)
+    print("已移除应用菜单入口、桌面快捷方式和图标")
     return 0
 
 
@@ -108,6 +132,10 @@ def desktop_entry_path() -> Path:
     return applications_path() / f"{APP_ID}.desktop"
 
 
+def desktop_shortcut_path() -> Path:
+    return _desktop_dir() / f"{APP_ID}.desktop"
+
+
 def is_service_installed() -> bool:
     return service_unit_path().exists()
 
@@ -121,7 +149,7 @@ def is_service_active() -> bool:
 
 
 def is_desktop_installed() -> bool:
-    return desktop_entry_path().exists()
+    return desktop_entry_path().exists() and desktop_shortcut_path().exists()
 
 
 def toggle_command_text() -> str:
@@ -175,6 +203,30 @@ def _is_appimage() -> bool:
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _desktop_dir() -> Path:
+    configured = os.environ.get("XDG_DESKTOP_DIR")
+    if configured:
+        return Path(configured).expanduser()
+
+    user_dirs_path = Path.home() / ".config" / "user-dirs.dirs"
+    if user_dirs_path.exists():
+        for raw_line in user_dirs_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line.startswith("XDG_DESKTOP_DIR="):
+                continue
+            _, value = line.split("=", 1)
+            return _expand_user_dir(value)
+
+    return Path.home() / "Desktop"
+
+
+def _expand_user_dir(value: str) -> Path:
+    cleaned = value.strip().strip('"').strip("'")
+    home = str(Path.home())
+    cleaned = cleaned.replace("${HOME}", home).replace("$HOME", home)
+    return Path(cleaned).expanduser()
 
 
 def _systemd_arg(value: str) -> str:

@@ -42,6 +42,7 @@ def test_default_doubao_config_uses_streaming_asr_2(tmp_path: Path) -> None:
     assert config.doubao_resource_id == "volc.seedasr.sauc.duration"
     assert config.paste_at_mouse is True
     assert config.paste_hotkey == "ctrl+v"
+    assert config.append_final_punctuation is True
 
 
 def test_load_config_paste_hotkey(tmp_path: Path) -> None:
@@ -49,6 +50,13 @@ def test_load_config_paste_hotkey(tmp_path: Path) -> None:
     env.write_text("VOICE_INPUT_PASTE_HOTKEY=ctrl+shift+v\n", encoding="utf-8")
     config = load_config(env, {})
     assert config.paste_hotkey == "ctrl+shift+v"
+
+
+def test_load_config_append_final_punctuation(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("VOICE_INPUT_APPEND_FINAL_PUNCTUATION=false\n", encoding="utf-8")
+    config = load_config(env, {})
+    assert config.append_final_punctuation is False
 
 
 def test_write_env_file_preserves_comments(tmp_path: Path) -> None:
@@ -77,3 +85,4 @@ def test_ensure_config_file_creates_default(tmp_path: Path) -> None:
     text = env.read_text(encoding="utf-8")
     assert "VOICE_INPUT_ASR=mock" in text
     assert "VOICE_INPUT_PASTE_HOTKEY=ctrl+v" in text
+    assert "VOICE_INPUT_APPEND_FINAL_PUNCTUATION=true" in text

@@ -29,6 +29,7 @@ CONFIG_ENV_KEYS = [
     "VOICE_INPUT_PREFER_FCITX5",
     "VOICE_INPUT_PASTE_AT_MOUSE",
     "VOICE_INPUT_PASTE_HOTKEY",
+    "VOICE_INPUT_APPEND_FINAL_PUNCTUATION",
     "VOICE_INPUT_SAMPLE_RATE",
     "VOICE_INPUT_CHANNELS",
     "VOICE_INPUT_CHUNK_MS",
@@ -176,6 +177,7 @@ class AppConfig:
     prefer_fcitx5: bool = True
     paste_at_mouse: bool = True
     paste_hotkey: str = "ctrl+v"
+    append_final_punctuation: bool = True
 
     sample_rate: int = 16000
     channels: int = 1
@@ -211,6 +213,7 @@ class AppConfig:
             prefer_fcitx5=_get_bool(values, "VOICE_INPUT_PREFER_FCITX5", True),
             paste_at_mouse=_get_bool(values, "VOICE_INPUT_PASTE_AT_MOUSE", True),
             paste_hotkey=values.get("VOICE_INPUT_PASTE_HOTKEY", "ctrl+v").strip().lower() or "ctrl+v",
+            append_final_punctuation=_get_bool(values, "VOICE_INPUT_APPEND_FINAL_PUNCTUATION", True),
             sample_rate=_get_int(values, "VOICE_INPUT_SAMPLE_RATE", 16000),
             channels=_get_int(values, "VOICE_INPUT_CHANNELS", 1),
             chunk_ms=_get_int(values, "VOICE_INPUT_CHUNK_MS", 200),
@@ -268,6 +271,7 @@ def config_to_env(config: AppConfig) -> dict[str, str]:
         "VOICE_INPUT_PREFER_FCITX5": "true" if config.prefer_fcitx5 else "false",
         "VOICE_INPUT_PASTE_AT_MOUSE": "true" if config.paste_at_mouse else "false",
         "VOICE_INPUT_PASTE_HOTKEY": config.paste_hotkey,
+        "VOICE_INPUT_APPEND_FINAL_PUNCTUATION": "true" if config.append_final_punctuation else "false",
         "VOICE_INPUT_SAMPLE_RATE": str(config.sample_rate),
         "VOICE_INPUT_CHANNELS": str(config.channels),
         "VOICE_INPUT_CHUNK_MS": str(config.chunk_ms),

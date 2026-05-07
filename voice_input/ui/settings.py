@@ -72,6 +72,8 @@ class SettingsDialog(QDialog):
         if config.paste_hotkey not in {"ctrl+v", "ctrl+shift+v", "shift+insert"}:
             self.paste_hotkey.addItem(config.paste_hotkey)
         self.paste_hotkey.setCurrentText(config.paste_hotkey)
+        self.append_final_punctuation = QCheckBox("自动补句号")
+        self.append_final_punctuation.setChecked(config.append_final_punctuation)
         self.toggle_command = QLineEdit(toggle_command_text())
         self.toggle_command.setReadOnly(True)
         self.copy_toggle_command = QPushButton("复制")
@@ -154,6 +156,7 @@ class SettingsDialog(QDialog):
             prefer_fcitx5=self.prefer_fcitx5.isChecked(),
             paste_at_mouse=self.paste_at_mouse.isChecked(),
             paste_hotkey=self.paste_hotkey.currentText(),
+            append_final_punctuation=self.append_final_punctuation.isChecked(),
             sample_rate=self.sample_rate.value(),
             channels=self.channels.value(),
             chunk_ms=self.chunk_ms.value(),
@@ -193,6 +196,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.prefer_fcitx5)
         form.addRow("", self.paste_at_mouse)
         form.addRow("粘贴快捷键", self.paste_hotkey)
+        form.addRow("末尾标点", self.append_final_punctuation)
         form.addRow(_separator("Wayland 快捷键"))
         note = QLabel("把 toggle 命令绑定到系统或 compositor 的全局快捷键；后台服务需要先运行。")
         note.setWordWrap(True)
