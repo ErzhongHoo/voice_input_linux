@@ -51,6 +51,7 @@ from voice_input.config import (
     config_to_env,
     doubao_endpoint_for_mode,
 )
+from voice_input.error_actions import describe_error
 from voice_input.history import HistoryEntry
 from voice_input.installer import (
     install_desktop,
@@ -65,7 +66,13 @@ from voice_input.installer import (
 )
 from voice_input.inject.base import InjectionError
 from voice_input.inject.clipboard_injector import copy_to_clipboard
-from voice_input.ui.settings import MicrophoneLevelAnimation, MicrophoneTestWorker, ModelConnectionSignals
+from voice_input.ui.hotkey_capture import HotkeyCaptureEdit
+from voice_input.ui.settings import (
+    MicrophoneLevelAnimation,
+    MicrophoneMonitorWorker,
+    MicrophoneTestWorker,
+    ModelConnectionSignals,
+)
 
 
 class ControlPanel(QWidget):
@@ -207,15 +214,25 @@ class ControlPanel(QWidget):
             self._center_on_screen()
         self.raise_()
         self.activateWindow()
+        self._start_input_monitor()
+
+    def show_model_page(self) -> None:
+        self._select_page(1)
+
+    def show_settings_page(self) -> None:
+        self._select_page(2)
 
     def set_recording(self, recording: bool) -> None:
         was_recording = self._recording
         self._recording = recording
         self._set_pill(self.recording_status, "录音中" if recording else "待机", "recording" if recording else "muted")
+        if recording:
+            self._stop_input_monitor()
         if self._test_thread is None:
             self.refresh_input_devices.setEnabled(not recording)
         if was_recording and not recording:
             self._populate_input_devices(rescan=True)
+            self._start_input_monitor()
 
     def update_config(self, config: AppConfig) -> None:
         self.config = config
@@ -506,6 +523,9 @@ class ControlPanel(QWidget):
         self._input_test_timer.timeout.connect(self._update_input_test_time)
         self._test_thread: QThread | None = None
         self._test_worker: MicrophoneTestWorker | None = None
+        self._monitor_thread: QThread | None = None
+        self._monitor_worker: MicrophoneMonitorWorker | None = None
+        self._restart_monitor_after_stop = False
         self._connection_test_thread: threading.Thread | None = None
         self._connection_test_started_at = 0.0
         self._connection_test_closing = False
@@ -524,9 +544,11 @@ class ControlPanel(QWidget):
 
         self.hotkey_backend_input = NoWheelComboBox()
         self.hotkey_backend_input.addItems(["auto", "pynput", "evdev", "none"])
-        self.hotkey_key_input = QLineEdit()
+        self.hotkey_key_input = HotkeyCaptureEdit()
         self.evdev_key_input = QLineEdit()
+        self.evdev_key_input.setReadOnly(True)
         self.evdev_device_input = QLineEdit()
+        self.hotkey_key_input.hotkeyCaptured.connect(self._handle_hotkey_captured)
         self.injector_backend_input = NoWheelComboBox()
         self.injector_backend_input.addItems(["auto", "fcitx5", "xdotool", "wtype", "ydotool", "clipboard"])
         self.prefer_fcitx5_input = QCheckBox("优先尝试 fcitx5 DBus commit text")
@@ -599,14 +621,14 @@ class ControlPanel(QWidget):
         form.addRow(_separator("录音", first=True))
         form.addRow("麦克风", self._input_device_selector())
         form.addRow("", self.input_device_notice)
-        form.addRow("麦克风测试", self._input_test_widget())
+        form.addRow("麦克风音量", self._input_test_widget())
         form.addRow("采样率", self.sample_rate_input)
         form.addRow("声道数", self.channels_input)
         form.addRow("分包毫秒", self.chunk_ms_input)
         form.addRow(_separator("快捷键"))
         form.addRow("快捷键 backend", self.hotkey_backend_input)
-        form.addRow("pynput 键名", self.hotkey_key_input)
-        form.addRow("evdev 键码", self.evdev_key_input)
+        form.addRow("快捷键", self.hotkey_key_input)
+        form.addRow("evdev 键码（自动）", self.evdev_key_input)
         form.addRow("evdev 设备", self.evdev_device_input)
         form.addRow(_separator("文字输入"))
         form.addRow("输入 backend", self.injector_backend_input)
@@ -712,7 +734,9 @@ class ControlPanel(QWidget):
     def _handle_model_connection_failed(self, kind: str, message: str) -> None:
         if self._connection_test_closing:
             return
-        self._set_connection_test_status(kind, f"失败: {_short_text(message, 42)}", "warn", message)
+        error = describe_error(message, "model")
+        tooltip = f"{error.suggestion}\n\n{message}"
+        self._set_connection_test_status(kind, f"失败: {error.summary}", "warn", tooltip)
         self._clear_model_connection_test()
 
     def _clear_model_connection_test(self) -> None:
@@ -757,9 +781,16 @@ class ControlPanel(QWidget):
             return
         self._start_input_device_test()
 
+    def pause_input_monitor(self) -> None:
+        self._stop_input_monitor(wait_ms=1000)
+
+    def resume_input_monitor(self) -> None:
+        self._start_input_monitor()
+
     def _start_input_device_test(self) -> None:
         if self._test_thread is not None:
             return
+        self._stop_input_monitor()
         self.input_level.setValue(0)
         self.input_level_animation.set_level(0.0)
         self.input_test_time.setText("00:00")
@@ -810,10 +841,12 @@ class ControlPanel(QWidget):
             self.input_test_result.setText(f"声音很小 peak={peak:.3f}")
 
     def _handle_input_test_failed(self, message: str) -> None:
+        error = describe_error(message, "microphone")
         self.input_level.setValue(0)
         self.input_level_animation.set_level(0.0)
         self.input_test_result.setText("测试失败")
-        QMessageBox.warning(self, "麦克风测试失败", message)
+        self._set_inline_status(self.input_device_notice, error.suggestion, "warn", message)
+        QMessageBox.warning(self, error.title, f"{error.summary}\n\n{error.suggestion}\n\n详细信息:\n{message}")
 
     def _clear_input_test_worker(self) -> None:
         self._input_test_timer.stop()
@@ -823,6 +856,73 @@ class ControlPanel(QWidget):
         self.test_input_device.setText("测试")
         self.test_input_device.setEnabled(True)
         self.refresh_input_devices.setEnabled(not self._recording)
+        self._start_input_monitor()
+
+    def _start_input_monitor(self) -> None:
+        if (
+            not self.isVisible()
+            or self._recording
+            or self._monitor_thread is not None
+            or self._test_thread is not None
+        ):
+            return
+        self.input_test_time.setText("实时")
+        self.input_test_result.setText("监听中")
+        worker = MicrophoneMonitorWorker(
+            device=self._selected_input_device() or None,
+            channels=self.channels_input.value(),
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.level_changed.connect(self._handle_input_monitor_level_changed)
+        worker.failed.connect(self._handle_input_monitor_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_input_monitor_worker)
+        self._monitor_worker = worker
+        self._monitor_thread = thread
+        thread.start()
+
+    def _stop_input_monitor(self, wait_ms: int = 0, restart: bool = False) -> None:
+        self._restart_monitor_after_stop = restart
+        if self._monitor_worker is not None:
+            self._monitor_worker.stop()
+        if wait_ms and self._monitor_thread is not None and self._monitor_thread.isRunning():
+            self._monitor_thread.wait(wait_ms)
+
+    def _restart_input_monitor(self) -> None:
+        if self._syncing_settings or self._recording or self._test_thread is not None:
+            return
+        if self._monitor_thread is None:
+            self._start_input_monitor()
+            return
+        self._stop_input_monitor(restart=True)
+
+    def _handle_input_monitor_level_changed(self, peak: float, rms: float) -> None:
+        level = max(peak, min(1.0, rms * 5.0))
+        self.input_level.setValue(round(level * 100))
+        self.input_level_animation.set_level(level)
+        self.input_test_time.setText("实时")
+        self.input_test_result.setText(f"有输入 peak={peak:.3f}" if peak >= 0.03 or rms >= 0.005 else "监听中")
+
+    def _handle_input_monitor_failed(self, message: str) -> None:
+        error = describe_error(message, "microphone")
+        self.input_level.setValue(0)
+        self.input_level_animation.set_level(0.0)
+        self.input_test_time.setText("实时")
+        self.input_test_result.setText("监听不可用")
+        self._set_inline_status(self.input_device_notice, error.suggestion, "warn", message)
+
+    def _clear_input_monitor_worker(self) -> None:
+        restart = self._restart_monitor_after_stop
+        self._restart_monitor_after_stop = False
+        self._monitor_thread = None
+        self._monitor_worker = None
+        if restart:
+            QTimer.singleShot(0, self._start_input_monitor)
 
     def _update_input_test_time(self) -> None:
         if self._input_test_started_at <= 0:
@@ -950,7 +1050,7 @@ class ControlPanel(QWidget):
             self.channels_input.setValue(config.channels)
             self.chunk_ms_input.setValue(config.chunk_ms)
             self.hotkey_backend_input.setCurrentText(config.hotkey_backend)
-            self.hotkey_key_input.setText(config.hotkey_key)
+            self.hotkey_key_input.setHotkey(config.hotkey_key, config.evdev_key)
             self.evdev_key_input.setText(config.evdev_key)
             self.evdev_device_input.setText(config.evdev_device)
             self.injector_backend_input.setCurrentText(config.injector_backend)
@@ -993,9 +1093,9 @@ class ControlPanel(QWidget):
             organizer_model=self.organizer_model_input.text().strip(),
             organizer_timeout=self.organizer_timeout_input.value(),
             hotkey_backend=self.hotkey_backend_input.currentText(),
-            hotkey_key=self.hotkey_key_input.text().strip() or "right_alt",
+            hotkey_key=self.hotkey_key_input.hotkey_key(),
             evdev_device=self.evdev_device_input.text().strip(),
-            evdev_key=self.evdev_key_input.text().strip() or "KEY_RIGHTALT",
+            evdev_key=self.hotkey_key_input.evdev_key(),
             injector_backend=self.injector_backend_input.currentText(),
             prefer_fcitx5=self.prefer_fcitx5_input.isChecked(),
             paste_at_mouse=self.paste_at_mouse_input.isChecked(),
@@ -1024,7 +1124,6 @@ class ControlPanel(QWidget):
             self.organizer_endpoint_input,
             self.organizer_api_key_input.line,
             self.organizer_model_input,
-            self.hotkey_key_input,
             self.evdev_key_input,
             self.evdev_device_input,
         ]
@@ -1044,6 +1143,8 @@ class ControlPanel(QWidget):
         for combo in combo_fields:
             combo.currentIndexChanged.connect(self._schedule_auto_save)
         self.input_device_combo.editTextChanged.connect(self._schedule_auto_save)
+        self.input_device_combo.currentIndexChanged.connect(lambda index: self._restart_input_monitor())
+        self.input_device_combo.editTextChanged.connect(lambda text: self._restart_input_monitor())
 
         spin_fields = [
             self.sample_rate_input,
@@ -1055,6 +1156,7 @@ class ControlPanel(QWidget):
         ]
         for spin in spin_fields:
             spin.valueChanged.connect(self._schedule_auto_save)
+        self.channels_input.valueChanged.connect(lambda value: self._restart_input_monitor())
 
         check_fields = [
             self.doubao_enable_punc_input,
@@ -1068,6 +1170,7 @@ class ControlPanel(QWidget):
         ]
         for field in check_fields:
             field.toggled.connect(self._schedule_auto_save)
+        self.hotkey_key_input.hotkeyCaptured.connect(lambda hotkey, evdev, label: self._schedule_auto_save())
 
     def _schedule_auto_save(self) -> None:
         if self._syncing_settings:
@@ -1091,6 +1194,9 @@ class ControlPanel(QWidget):
     def _handle_asr_provider_changed(self) -> None:
         self._update_asr_provider_visibility()
         self._schedule_auto_save()
+
+    def _handle_hotkey_captured(self, hotkey: str, evdev: str, label: str) -> None:
+        self.evdev_key_input.setText(evdev)
 
     def _update_asr_provider_visibility(self) -> None:
         if self._model_form_layout is None:
@@ -1304,11 +1410,16 @@ class ControlPanel(QWidget):
         self._connection_test_closing = True
         self._input_device_refresh_timer.stop()
         self._timer.stop()
+        self._stop_input_monitor(wait_ms=1000)
         if self._test_worker is not None:
             self._test_worker.stop()
         if self._test_thread is not None and self._test_thread.isRunning():
             self._test_thread.wait(1000)
         super().closeEvent(event)
+
+    def hideEvent(self, event: object) -> None:  # noqa: D401
+        self._stop_input_monitor(wait_ms=600)
+        super().hideEvent(event)
 
     def _refresh_style(self, widget: QWidget) -> None:
         widget.style().unpolish(widget)

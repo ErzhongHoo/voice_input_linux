@@ -22,6 +22,7 @@ from .asr.mock_asr import MockAsrClient
 from .asr.qwen_realtime_asr import QwenRealtimeASRClient
 from .audio.recorder import AudioRecorder, RecorderError
 from .config import ASR_PROVIDER_QWEN, DOUBAO_ASR_PROVIDERS, AppConfig, ensure_config_file, load_config, write_env_file
+from .error_actions import ActionableError, describe_error
 from .history import append_history, clear_history as clear_saved_history, load_history
 from .hotkey.base import HotkeyBackend, HotkeyError
 from .hotkey.evdev_backend import EvdevHotkeyBackend
@@ -250,6 +251,7 @@ class VoiceInputApp:
             on_save_settings=self.save_panel_settings,
             history_entries=self.history_entries,
         )
+        self.settings_dialog: SettingsDialog | None = None
         self.tray = TrayController(
             on_show=self.show_control_panel,
             on_toggle=self.toggle_recording,
@@ -297,13 +299,52 @@ class VoiceInputApp:
     def show_control_panel(self) -> None:
         self.control_panel.show_panel()
 
+    def _show_actionable_error(self, message: str, context: str, notification_title: str | None = None) -> None:
+        error = describe_error(message, context)
+        detail = str(message)
+        overlay_message = f"{error.summary}\n{error.suggestion}"
+        self.overlay.show_error(overlay_message)
+        self.tray.notify(notification_title or error.title, error.suggestion)
+        if self.control_panel.isVisible():
+            self._show_actionable_error_dialog(error, detail)
+
+    def _show_actionable_error_dialog(self, error: ActionableError, detail: str) -> None:
+        box = QMessageBox(self.control_panel)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(error.title)
+        box.setText(error.summary)
+        box.setInformativeText(f"{error.suggestion}\n\n详细信息:\n{detail}")
+        action_button = None
+        if error.primary_action == "model":
+            action_button = box.addButton("打开模型设置", QMessageBox.ButtonRole.ActionRole)
+        elif error.primary_action == "settings":
+            action_button = box.addButton("打开设置", QMessageBox.ButtonRole.ActionRole)
+        elif error.primary_action == "environment":
+            action_button = box.addButton("环境检查", QMessageBox.ButtonRole.ActionRole)
+        copy_button = box.addButton("复制错误", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked == copy_button:
+            QApplication.clipboard().setText(detail)
+        elif action_button is not None and clicked == action_button:
+            if error.primary_action == "environment":
+                self.show_environment()
+            elif error.primary_action == "model":
+                self.control_panel.show_panel()
+                self.control_panel.show_model_page()
+            else:
+                self.control_panel.show_panel()
+                self.control_panel.show_settings_page()
+
     def _start_hotkey(self) -> None:
         try:
             self.hotkey = self._create_hotkey_backend()
             if self.hotkey is None:
                 message = "未启用全局快捷键，请使用托盘或 compositor 调用 CLI toggle。"
                 LOGGER.warning(message)
-                self.tray.notify("Voice Input Linux", message)
+                self._show_actionable_error(message, "hotkey", "快捷键未启用")
                 return
             self.hotkey.start(
                 lambda: self.signals.hotkey_pressed.emit(),
@@ -313,7 +354,7 @@ class VoiceInputApp:
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to start hotkey backend")
             self.hotkey = None
-            self.tray.notify("快捷键不可用", str(exc))
+            self._show_actionable_error(str(exc), "hotkey", "快捷键不可用")
 
     def _create_hotkey_backend(self) -> HotkeyBackend | None:
         backend = self.config.hotkey_backend
@@ -407,8 +448,9 @@ class VoiceInputApp:
         if self.is_recording:
             return
         if self.organizer_worker and self.organizer_worker.is_alive():
-            self.overlay.show_error("上一段语音还在整理")
+            self._show_actionable_error("上一段语音还在整理", "organizer", "暂时不能录音")
             return
+        self._pause_input_monitors()
         try:
             client = self._create_asr_client()
             self._recording_mode = mode
@@ -430,8 +472,8 @@ class VoiceInputApp:
             if self.asr_worker:
                 self.asr_worker.finish()
                 self.asr_worker = None
-            self.overlay.show_error(str(exc))
-            self.tray.notify("无法开始录音", str(exc))
+            self._resume_input_monitors()
+            self._show_actionable_error(str(exc), "recording", "无法开始录音")
             return
 
         self.is_recording = True
@@ -456,6 +498,8 @@ class VoiceInputApp:
             LOGGER.warning("Recorder stop failed: %s", exc)
         self.tray.set_recording(False)
         self.control_panel.set_recording(False)
+        if self.settings_dialog is not None:
+            self.settings_dialog.resume_input_monitor()
         self.overlay.show_recognizing()
         if self.asr_worker:
             self.asr_worker.finish()
@@ -487,7 +531,7 @@ class VoiceInputApp:
                 self._recording_max_level,
                 self._recording_chunks,
             )
-            self.overlay.show_error("识别结果为空")
+            self._show_actionable_error("识别结果为空", "asr_empty", "没有识别到文字")
             return
 
         if mode == RECORDING_MODE_ORGANIZER:
@@ -523,7 +567,7 @@ class VoiceInputApp:
         self.organizer_worker = None
         final_text = self.postprocessor.process(text)
         if not final_text:
-            self.overlay.show_error("整理结果为空")
+            self._show_actionable_error("整理结果为空", "organizer_empty", "整理结果为空")
             return
         self._commit_final_text(final_text, f"{self.config.asr_provider}+{self.config.organizer_provider}")
 
@@ -544,8 +588,7 @@ class VoiceInputApp:
             self.injector.inject_text(final_text)
         except InjectionError as exc:
             LOGGER.exception("Text injection failed")
-            self.overlay.show_error(f"无法输入文字: {exc}")
-            self.tray.notify("无法输入文字", str(exc))
+            self._show_actionable_error(f"无法输入文字: {exc}", "injection", "无法输入文字")
             return
 
         self.overlay.show_result(final_text)
@@ -566,12 +609,13 @@ class VoiceInputApp:
                 pass
             self.tray.set_recording(False)
             self.control_panel.set_recording(False)
+            if self.settings_dialog is not None:
+                self.settings_dialog.resume_input_monitor()
         if worker and worker.is_alive():
             worker.finish()
         self.asr_worker = None
         LOGGER.error("ASR/recording error: %s", message)
-        self.overlay.show_error(message)
-        self.tray.notify("语音输入错误", message)
+        self._show_actionable_error(message, "asr", "语音输入错误")
 
     def _create_asr_client(self) -> AsrClient:
         if self.config.asr_provider == "mock":
@@ -607,7 +651,22 @@ class VoiceInputApp:
             QMessageBox.warning(None, "Voice Input Linux 设置", "录音中不能修改设置，请先停止录音。")
             return
         dialog = SettingsDialog(self.config, on_auto_save=self.save_panel_settings)
-        dialog.exec()
+        self.settings_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            if self.settings_dialog is dialog:
+                self.settings_dialog = None
+
+    def _pause_input_monitors(self) -> None:
+        self.control_panel.pause_input_monitor()
+        if self.settings_dialog is not None:
+            self.settings_dialog.pause_input_monitor()
+
+    def _resume_input_monitors(self) -> None:
+        self.control_panel.resume_input_monitor()
+        if self.settings_dialog is not None:
+            self.settings_dialog.resume_input_monitor()
 
     def save_panel_settings(self, env: dict[str, str]) -> bool:
         if self.is_recording:

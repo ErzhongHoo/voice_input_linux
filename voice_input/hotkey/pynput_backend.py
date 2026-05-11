@@ -78,6 +78,50 @@ class PynputHotkeyBackend(HotkeyBackend):
         if normalized == "right_alt" and hasattr(keyboard.Key, "alt_gr"):
             targets.add(keyboard.Key.alt_gr)
 
+        key_attrs = {
+            "left_alt": "alt_l",
+            "right_alt": "alt_r",
+            "alt_l": "alt_l",
+            "alt_r": "alt_r",
+            "left_ctrl": "ctrl_l",
+            "right_ctrl": "ctrl_r",
+            "ctrl_l": "ctrl_l",
+            "ctrl_r": "ctrl_r",
+            "left_shift": "shift_l",
+            "right_shift": "shift_r",
+            "shift_l": "shift_l",
+            "shift_r": "shift_r",
+            "left_super": "cmd_l",
+            "right_super": "cmd_r",
+            "super": "cmd",
+            "enter": "enter",
+            "return": "enter",
+            "esc": "esc",
+            "escape": "esc",
+            "space": "space",
+            "tab": "tab",
+            "backspace": "backspace",
+            "insert": "insert",
+            "delete": "delete",
+            "home": "home",
+            "end": "end",
+            "page_up": "page_up",
+            "page_down": "page_down",
+            "left": "left",
+            "right": "right",
+            "up": "up",
+            "down": "down",
+            "caps_lock": "caps_lock",
+        }
+        for name in names | {normalized}:
+            attr = key_attrs.get(name, name)
+            if hasattr(keyboard.Key, attr):
+                targets.add(getattr(keyboard.Key, attr))
+            elif len(name) == 1:
+                targets.add(keyboard.KeyCode.from_char(name))
+            elif name.startswith("f") and name[1:].isdigit() and hasattr(keyboard.Key, name):
+                targets.add(getattr(keyboard.Key, name))
+
         if not targets:
             raise HotkeyError(f"不支持的 pynput 快捷键: {self.key_name}")
         return targets

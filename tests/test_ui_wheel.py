@@ -1,8 +1,10 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from voice_input.audio.devices import InputDeviceInfo
 from voice_input.config import ASR_PROVIDER_QWEN, AppConfig
 from voice_input.ui.control_panel import NoWheelSpinBox as ControlPanelNoWheelSpinBox
+from voice_input.ui.hotkey_capture import HotkeyCaptureEdit, captured_hotkey_from_qt_key
 from voice_input.ui.settings import NoWheelSpinBox as SettingsNoWheelSpinBox
 from voice_input.ui.settings import SettingsDialog
 
@@ -85,6 +87,27 @@ def test_settings_refresh_reports_new_microphone(monkeypatch) -> None:
         assert "USB Mic" in dialog.input_device_notice.toolTip()
     finally:
         dialog.close()
+
+
+def test_hotkey_capture_maps_right_alt_scan_code() -> None:
+    captured = captured_hotkey_from_qt_key(Qt.Key.Key_Alt, native_scan_code=108)
+
+    assert captured is not None
+    assert captured.hotkey_key == "right_alt"
+    assert captured.evdev_key == "KEY_RIGHTALT"
+
+
+def test_hotkey_capture_maps_letter_and_evdev_fallback() -> None:
+    _app()
+    captured = captured_hotkey_from_qt_key(Qt.Key.Key_A)
+    editor = HotkeyCaptureEdit()
+    editor.setHotkey("f8", "")
+
+    assert captured is not None
+    assert captured.hotkey_key == "a"
+    assert captured.evdev_key == "KEY_A"
+    assert editor.text() == "F8"
+    assert editor.evdev_key() == "KEY_F8"
 
 
 def _app() -> QApplication:
