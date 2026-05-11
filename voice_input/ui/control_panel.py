@@ -596,7 +596,7 @@ class ControlPanel(QWidget):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.setHorizontalSpacing(16)
         form.setVerticalSpacing(10)
-        form.addRow(_separator("录音"))
+        form.addRow(_separator("录音", first=True))
         form.addRow("麦克风", self._input_device_selector())
         form.addRow("", self.input_device_notice)
         form.addRow("麦克风测试", self._input_test_widget())
@@ -1395,8 +1395,11 @@ class ControlPanel(QWidget):
                 color: {muted};
                 font-size: 15px;
                 font-weight: 700;
-                padding-top: 8px;
-                padding-bottom: 2px;
+                padding-top: 18px;
+                padding-bottom: 5px;
+            }}
+            QLabel#SeparatorLabel[first="true"] {{
+                padding-top: 0;
             }}
             QLabel#InlineStatus {{
                 color: {muted};
@@ -1704,7 +1707,8 @@ def _history_item_text(entry: HistoryEntry) -> str:
     return f"{timestamp}{provider}  {_short_text(text, 84)}"
 
 
-def _separator(text: str) -> QLabel:
+def _separator(text: str, first: bool = False) -> QLabel:
     label = QLabel(text)
     label.setObjectName("SeparatorLabel")
+    label.setProperty("first", first)
     return label

@@ -349,8 +349,11 @@ class SettingsDialog(QDialog):
                 color: {muted};
                 font-size: 15px;
                 font-weight: 700;
-                padding-top: 8px;
-                padding-bottom: 2px;
+                padding-top: 18px;
+                padding-bottom: 5px;
+            }}
+            QLabel#SeparatorLabel[first="true"] {{
+                padding-top: 0;
             }}
             QLabel#InlineStatus {{
                 color: {muted};
@@ -1095,9 +1098,10 @@ def _set_combo_data(combo: QComboBox, data: str) -> None:
             return
 
 
-def _separator(text: str) -> QLabel:
+def _separator(text: str, first: bool = False) -> QLabel:
     label = QLabel(text)
     label.setObjectName("SeparatorLabel")
+    label.setProperty("first", first)
     return label
 
 
