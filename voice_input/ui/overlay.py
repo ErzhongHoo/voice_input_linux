@@ -212,21 +212,19 @@ class OverlayWindow(QWidget):
             dark = palette.window().color().lightness() < 128
 
         if dark:
-            bg = "rgba(23, 23, 23, 235)"
-            fg = "#f4f4f5"
-            muted = "#a1a1aa"
-            border = "rgba(45, 212, 191, 0.42)"
+            bg = "rgba(24, 24, 27, 235)"
+            fg = "#f8fafc"
+            muted = "#cbd5e1"
         else:
             bg = "rgba(255, 255, 255, 245)"
-            fg = "#18181b"
-            muted = "#667085"
-            border = "rgba(15, 118, 110, 0.28)"
+            fg = "#111827"
+            muted = "#475569"
 
         self.setStyleSheet(
             f"""
             OverlayWindow {{
                 background: {bg};
-                border: 1px solid {border};
+                border: 1px solid rgba(148, 163, 184, 0.35);
                 border-radius: 50px;
             }}
             QLabel {{
