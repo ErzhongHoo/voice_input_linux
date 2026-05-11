@@ -1393,9 +1393,9 @@ class ControlPanel(QWidget):
             }}
             QLabel#SeparatorLabel {{
                 color: {muted};
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 600;
-                padding-top: 8px;
+                padding-top: 4px;
                 padding-bottom: 2px;
             }}
             QLabel#InlineStatus {{
@@ -1422,9 +1422,9 @@ class ControlPanel(QWidget):
             }}
             QLabel#SectionTitle {{
                 color: {text};
-                font-size: 16px;
+                font-size: 18px;
                 font-weight: 700;
-                min-height: 24px;
+                min-height: 30px;
             }}
             QLabel#StatusPill {{
                 border-radius: 12px;

@@ -347,9 +347,9 @@ class SettingsDialog(QDialog):
             }}
             QLabel#SeparatorLabel {{
                 color: {muted};
-                font-size: 13px;
-                font-weight: 700;
-                padding-top: 10px;
+                font-size: 12px;
+                font-weight: 600;
+                padding-top: 6px;
                 padding-bottom: 2px;
             }}
             QLabel#InlineStatus {{
@@ -383,6 +383,8 @@ class SettingsDialog(QDialog):
                 padding: 9px 16px;
                 margin-right: 4px;
                 min-height: 24px;
+                font-size: 15px;
+                font-weight: 600;
             }}
             QTabBar::tab:hover {{
                 background: {hover};
