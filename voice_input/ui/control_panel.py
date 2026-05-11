@@ -1393,9 +1393,9 @@ class ControlPanel(QWidget):
             }}
             QLabel#SeparatorLabel {{
                 color: {muted};
-                font-size: 12px;
-                font-weight: 600;
-                padding-top: 4px;
+                font-size: 15px;
+                font-weight: 700;
+                padding-top: 8px;
                 padding-bottom: 2px;
             }}
             QLabel#InlineStatus {{

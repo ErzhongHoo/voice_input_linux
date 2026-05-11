@@ -347,9 +347,9 @@ class SettingsDialog(QDialog):
             }}
             QLabel#SeparatorLabel {{
                 color: {muted};
-                font-size: 12px;
-                font-weight: 600;
-                padding-top: 6px;
+                font-size: 15px;
+                font-weight: 700;
+                padding-top: 8px;
                 padding-bottom: 2px;
             }}
             QLabel#InlineStatus {{
