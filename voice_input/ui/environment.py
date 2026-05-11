@@ -29,6 +29,7 @@ class EnvironmentDialog(QDialog):
         self.checks: list[EnvironmentCheck] = []
         self.setWindowTitle("环境检查")
         self.setMinimumSize(780, 560)
+        self.setObjectName("EnvironmentDialog")
 
         self.summary = QLabel("")
         self.summary.setObjectName("SummaryLabel")
@@ -114,20 +115,30 @@ class EnvironmentDialog(QDialog):
     def _apply_style(self) -> None:
         dark = self.palette().window().color().lightness() < 128
         if dark:
-            bg = "#111827"
-            panel = "#1f2937"
-            border = "#374151"
-            text = "#f9fafb"
-            muted = "#9ca3af"
+            bg = "#171717"
+            panel = "#242424"
+            field = "#18181b"
+            border = "#3f3f46"
+            text = "#f4f4f5"
+            muted = "#a1a1aa"
+            hover = "#2f2f32"
+            selected = "#134e4a"
+            selected_text = "#ccfbf1"
+            focus = "#2dd4bf"
         else:
-            bg = "#f5f7fb"
+            bg = "#f6f7f9"
             panel = "#ffffff"
-            border = "#d9e0ea"
-            text = "#101828"
+            field = "#f9fafb"
+            border = "#d5d9e2"
+            text = "#18181b"
             muted = "#667085"
+            hover = "#f3f4f6"
+            selected = "#ccfbf1"
+            selected_text = "#115e59"
+            focus = "#0f766e"
         self.setStyleSheet(
             f"""
-            QDialog {{
+            QDialog#EnvironmentDialog {{
                 background: {bg};
                 color: {text};
                 font-size: 14px;
@@ -144,26 +155,44 @@ class EnvironmentDialog(QDialog):
                 border: 1px solid {border};
                 border-radius: 8px;
                 color: {text};
+                selection-background-color: {selected};
+                selection-color: {selected_text};
             }}
             QHeaderView::section {{
-                background: {panel};
+                background: {field};
                 border: 0;
                 border-bottom: 1px solid {border};
-                padding: 8px;
+                padding: 9px 10px;
                 color: {muted};
                 font-weight: 700;
             }}
+            QTableWidget::item {{
+                padding: 8px;
+                border-bottom: 1px solid {field};
+            }}
+            QTableWidget::item:selected {{
+                background: {selected};
+                color: {selected_text};
+            }}
+            QPlainTextEdit {{
+                padding: 10px 12px;
+            }}
             QPushButton {{
-                min-height: 34px;
+                min-height: 38px;
                 border-radius: 8px;
-                padding: 6px 14px;
+                padding: 8px 16px;
                 border: 1px solid {border};
                 background: {panel};
                 color: {text};
                 font-weight: 600;
             }}
             QPushButton:hover {{
-                background: {border};
+                background: {hover};
+                border-color: {focus};
+            }}
+            QPushButton:pressed {{
+                background: {selected};
+                color: {selected_text};
             }}
             """
         )

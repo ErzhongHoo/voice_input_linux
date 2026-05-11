@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -61,8 +60,9 @@ class SettingsDialog(QDialog):
         on_auto_save: Callable[[dict[str, str]], bool | None] | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("SettingsDialog")
         self.setWindowTitle("Voice Input Linux 设置")
-        self.setMinimumWidth(620)
+        self.setMinimumSize(760, 620)
         self.config = config
         self._on_auto_save = on_auto_save
         self._syncing_settings = True
@@ -232,6 +232,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(path_row)
         layout.addWidget(tabs)
         layout.addWidget(buttons)
+        self._apply_style()
         self._connect_auto_save_fields()
         self._syncing_settings = False
 
@@ -294,6 +295,210 @@ class SettingsDialog(QDialog):
         ]
         for field in check_fields:
             field.toggled.connect(self._schedule_auto_save)
+
+    def _apply_style(self) -> None:
+        dark = self.palette().window().color().lightness() < 128
+        if dark:
+            bg = "#171717"
+            panel = "#242424"
+            field = "#18181b"
+            border = "#3f3f46"
+            text = "#f4f4f5"
+            muted = "#a1a1aa"
+            hover = "#2f2f32"
+            tab_checked = "#134e4a"
+            focus = "#2dd4bf"
+            accent = "#0f766e"
+            accent_hover = "#0d9488"
+            accent_pressed = "#115e59"
+            selected_text = "#ccfbf1"
+        else:
+            bg = "#f6f7f9"
+            panel = "#ffffff"
+            field = "#f9fafb"
+            border = "#d5d9e2"
+            text = "#18181b"
+            muted = "#667085"
+            hover = "#f3f4f6"
+            tab_checked = "#ccfbf1"
+            focus = "#0f766e"
+            accent = "#0f766e"
+            accent_hover = "#0d9488"
+            accent_pressed = "#115e59"
+            selected_text = "#115e59"
+
+        self.setStyleSheet(
+            f"""
+            QDialog#SettingsDialog {{
+                background: {bg};
+                color: {text};
+                font-size: 14px;
+            }}
+            QLabel {{
+                color: {text};
+            }}
+            QLabel#SeparatorLabel {{
+                color: {muted};
+                font-size: 13px;
+                font-weight: 700;
+                padding-top: 10px;
+                padding-bottom: 2px;
+            }}
+            QTabWidget::pane {{
+                background: {panel};
+                border: 1px solid {border};
+                border-radius: 8px;
+                top: -1px;
+            }}
+            QTabBar::tab {{
+                background: transparent;
+                color: {muted};
+                border: 1px solid transparent;
+                border-bottom: 0;
+                padding: 9px 16px;
+                margin-right: 4px;
+                min-height: 24px;
+            }}
+            QTabBar::tab:hover {{
+                background: {hover};
+                color: {text};
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+            }}
+            QTabBar::tab:selected {{
+                background: {tab_checked};
+                color: {selected_text};
+                border-color: {focus};
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                font-weight: 700;
+            }}
+            QLineEdit,
+            QComboBox,
+            QSpinBox,
+            QDoubleSpinBox,
+            QPlainTextEdit {{
+                background: {field};
+                border: 1px solid {border};
+                border-radius: 8px;
+                color: {text};
+                padding: 7px 12px;
+                min-height: 34px;
+                selection-background-color: {focus};
+                selection-color: #ffffff;
+            }}
+            QLineEdit[readOnly="true"] {{
+                color: {muted};
+            }}
+            QPlainTextEdit {{
+                padding: 10px 12px;
+            }}
+            QLineEdit:focus,
+            QComboBox:focus,
+            QSpinBox:focus,
+            QDoubleSpinBox:focus,
+            QPlainTextEdit:focus {{
+                border-color: {focus};
+            }}
+            QComboBox {{
+                padding-right: 34px;
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 28px;
+                border: 0;
+                background: transparent;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+                width: 0;
+                height: 0;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid {focus};
+                margin-right: 10px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {panel};
+                color: {text};
+                border: 1px solid {border};
+                border-radius: 8px;
+                padding: 6px;
+                outline: 0;
+                selection-background-color: {tab_checked};
+                selection-color: {selected_text};
+            }}
+            QCheckBox {{
+                color: {text};
+                min-height: 30px;
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 1px solid {border};
+                background: {field};
+            }}
+            QCheckBox::indicator:hover {{
+                border-color: {focus};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {accent};
+                border-color: {accent};
+            }}
+            QPushButton {{
+                min-height: 38px;
+                border-radius: 8px;
+                padding: 8px 16px;
+                border: 1px solid {border};
+                background: {panel};
+                color: {text};
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: {hover};
+                border-color: {focus};
+            }}
+            QPushButton:pressed {{
+                background: {tab_checked};
+                color: {selected_text};
+            }}
+            QPushButton:disabled {{
+                background: {field};
+                color: {muted};
+                border-color: {border};
+            }}
+            QDialogButtonBox QPushButton {{
+                min-width: 96px;
+            }}
+            QProgressBar {{
+                background: {field};
+                border: 1px solid {border};
+                border-radius: 8px;
+                min-height: 18px;
+            }}
+            QProgressBar::chunk {{
+                background: {accent};
+                border-radius: 7px;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 10px;
+                margin: 4px 2px 4px 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {border};
+                border-radius: 4px;
+                min-height: 32px;
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height: 0;
+            }}
+            """
+        )
 
     def _schedule_auto_save(self) -> None:
         if self._syncing_settings:
@@ -768,12 +973,10 @@ def _set_combo_data(combo: QComboBox, data: str) -> None:
             return
 
 
-def _separator(text: str) -> QFrame:
-    frame = QFrame()
-    frame.setFrameShape(QFrame.Shape.HLine)
-    frame.setToolTip(text)
-    frame.setAccessibleName(text)
-    return frame
+def _separator(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("SeparatorLabel")
+    return label
 
 
 def _connection_test_title(kind: str, failed: bool = False) -> str:

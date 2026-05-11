@@ -1220,31 +1220,43 @@ class ControlPanel(QWidget):
     def _apply_style(self) -> None:
         dark = self.palette().window().color().lightness() < 128
         if dark:
-            bg = "#111827"
-            panel = "#1f2937"
-            sidebar = "#0f172a"
-            border = "#374151"
-            text = "#f9fafb"
-            muted = "#9ca3af"
-            field = "#111827"
-            secondary = "#273244"
-            secondary_hover = "#324158"
-            nav_hover = "#1f2937"
-            nav_checked = "#2563eb"
-            focus = "#60a5fa"
+            bg = "#171717"
+            panel = "#242424"
+            sidebar = "#1c1c1c"
+            border = "#3f3f46"
+            text = "#f4f4f5"
+            muted = "#a1a1aa"
+            field = "#18181b"
+            secondary = "#2f2f32"
+            secondary_hover = "#3a3a3d"
+            nav_hover = "#262626"
+            nav_checked = "#134e4a"
+            focus = "#2dd4bf"
+            accent = "#0f766e"
+            accent_hover = "#0d9488"
+            accent_pressed = "#115e59"
+            info_bg = "#134e4a"
+            info_text = "#ccfbf1"
+            selected_text = "#ccfbf1"
         else:
-            bg = "#f5f7fb"
+            bg = "#f6f7f9"
             panel = "#ffffff"
-            sidebar = "#ffffff"
-            border = "#d9e0ea"
-            text = "#101828"
+            sidebar = "#fbfbfc"
+            border = "#d5d9e2"
+            text = "#18181b"
             muted = "#667085"
-            field = "#f8fafc"
+            field = "#f9fafb"
             secondary = "#ffffff"
-            secondary_hover = "#f2f4f7"
-            nav_hover = "#eef2f7"
-            nav_checked = "#dbeafe"
-            focus = "#2563eb"
+            secondary_hover = "#f3f4f6"
+            nav_hover = "#eef2f1"
+            nav_checked = "#ccfbf1"
+            focus = "#0f766e"
+            accent = "#0f766e"
+            accent_hover = "#0d9488"
+            accent_pressed = "#115e59"
+            info_bg = "#ccfbf1"
+            info_text = "#115e59"
+            selected_text = "#115e59"
 
         self.setStyleSheet(
             f"""
@@ -1302,9 +1314,9 @@ class ControlPanel(QWidget):
                 border: 1px solid #bbf7d0;
             }}
             QLabel#StatusPill[state="info"] {{
-                background: #dbeafe;
-                color: #1d4ed8;
-                border: 1px solid #bfdbfe;
+                background: {info_bg};
+                color: {info_text};
+                border: 1px solid {focus};
             }}
             QLabel#StatusPill[state="recording"] {{
                 background: #fee2e2;
@@ -1325,7 +1337,7 @@ class ControlPanel(QWidget):
                 background: {field};
                 border: 1px solid {border};
                 border-radius: 8px;
-                padding: 8px 10px;
+                padding: 8px 12px;
                 color: {text};
             }}
             QLineEdit,
@@ -1335,9 +1347,11 @@ class ControlPanel(QWidget):
                 background: {field};
                 border: 1px solid {border};
                 border-radius: 8px;
-                padding: 7px 10px;
+                padding: 7px 12px;
                 color: {text};
                 min-height: 34px;
+                selection-background-color: {focus};
+                selection-color: #ffffff;
             }}
             QComboBox {{
                 padding-right: 34px;
@@ -1366,7 +1380,7 @@ class ControlPanel(QWidget):
                 padding: 6px;
                 outline: 0;
                 selection-background-color: {nav_checked};
-                selection-color: #1d4ed8;
+                selection-color: {selected_text};
             }}
             QComboBox QAbstractItemView::item {{
                 min-height: 30px;
@@ -1412,22 +1426,27 @@ class ControlPanel(QWidget):
                 border-radius: 6px;
             }}
             QListWidget#HistoryList::item:selected {{
-                background: #dbeafe;
-                color: #1d4ed8;
+                background: {nav_checked};
+                color: {selected_text};
             }}
             QPushButton {{
                 min-height: 38px;
                 border-radius: 8px;
-                padding: 7px 14px;
+                padding: 8px 16px;
                 font-weight: 600;
             }}
             QPushButton#PrimaryButton {{
-                background: #2563eb;
+                background: {accent};
                 color: #ffffff;
-                border: 1px solid #1d4ed8;
+                border: 1px solid {accent};
             }}
             QPushButton#PrimaryButton:hover {{
-                background: #1d4ed8;
+                background: {accent_hover};
+                border-color: {accent_hover};
+            }}
+            QPushButton#PrimaryButton:pressed {{
+                background: {accent_pressed};
+                border-color: {accent_pressed};
             }}
             QPushButton#PrimaryButton[recording="true"] {{
                 background: #dc2626;
@@ -1443,13 +1462,23 @@ class ControlPanel(QWidget):
             }}
             QPushButton#SecondaryButton:hover {{
                 background: {secondary_hover};
+                border-color: {focus};
+            }}
+            QPushButton#SecondaryButton:pressed {{
+                background: {nav_checked};
+                color: {selected_text};
+            }}
+            QPushButton:disabled {{
+                background: {field};
+                color: {muted};
+                border: 1px solid {border};
             }}
             QPushButton#NavButton {{
                 background: transparent;
                 color: {text};
                 border: 1px solid transparent;
                 text-align: left;
-                padding: 8px 10px;
+                padding: 9px 10px;
             }}
             QPushButton#NavButton:hover {{
                 background: {nav_hover};
@@ -1457,8 +1486,8 @@ class ControlPanel(QWidget):
             }}
             QPushButton#NavButton:checked {{
                 background: {nav_checked};
-                color: #1d4ed8;
-                border-color: #bfdbfe;
+                color: {selected_text};
+                border-color: {focus};
             }}
             QToolButton#CollapseButton {{
                 background: {secondary};
@@ -1471,11 +1500,12 @@ class ControlPanel(QWidget):
                 color: {text};
                 border: 1px solid {border};
                 border-radius: 8px;
-                font-size: 14px;
+                font-size: 13px;
             }}
             QToolButton#CollapseButton:hover,
             QToolButton#RevealButton:hover {{
                 background: {secondary_hover};
+                border-color: {focus};
             }}
             QToolButton#RevealButton:checked {{
                 border-color: {focus};
@@ -1512,10 +1542,10 @@ class SecretField(QWidget):
         self.line.setEchoMode(QLineEdit.EchoMode.Password)
         self.reveal_button = QToolButton()
         self.reveal_button.setObjectName("RevealButton")
-        self.reveal_button.setText("👁")
+        self.reveal_button.setText("显示")
         self.reveal_button.setToolTip("显示密钥")
         self.reveal_button.setCheckable(True)
-        self.reveal_button.setFixedSize(34, 34)
+        self.reveal_button.setFixedSize(56, 36)
         self.reveal_button.toggled.connect(self._toggle_reveal)
 
         layout = QHBoxLayout(self)
@@ -1532,6 +1562,7 @@ class SecretField(QWidget):
 
     def _toggle_reveal(self, checked: bool) -> None:
         self.line.setEchoMode(QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password)
+        self.reveal_button.setText("隐藏" if checked else "显示")
         self.reveal_button.setToolTip("隐藏密钥" if checked else "显示密钥")
 
 
