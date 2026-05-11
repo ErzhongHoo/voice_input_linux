@@ -9,10 +9,30 @@ from typing import Mapping
 
 
 TRUE_VALUES = {"1", "true", "yes", "on", "y"}
+ASR_PROVIDER_MOCK = "mock"
+ASR_PROVIDER_QWEN = "qwen"
+DOUBAO_ASR_PROVIDERS = {"doubao", "doubao_big_asr", "bigmodel"}
+QWEN_ASR_PROVIDERS = {"qwen", "qwen_asr", "qwen_realtime", "qwen3_asr", "aliyun", "aliyun_qwen", "dashscope", "bailian"}
 DOUBAO_ENDPOINT_REALTIME = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
 DOUBAO_ENDPOINT_STREAM_INPUT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
 DEFAULT_DOUBAO_ENDPOINT = DOUBAO_ENDPOINT_REALTIME
 DEFAULT_DOUBAO_RESOURCE_ID = "volc.seedasr.sauc.duration"
+DEFAULT_QWEN_ASR_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+DEFAULT_QWEN_ASR_MODEL = "qwen3-asr-flash-realtime"
+DEFAULT_QWEN_ASR_LANGUAGE = "zh"
+DEFAULT_QWEN_ASR_VAD_THRESHOLD = 0.0
+DEFAULT_QWEN_ASR_VAD_SILENCE_MS = 400
+DEFAULT_DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+ORGANIZER_PROVIDER_DEEPSEEK = "deepseek"
+ORGANIZER_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
+ORGANIZER_PROVIDERS = {
+    ORGANIZER_PROVIDER_DEEPSEEK,
+    ORGANIZER_PROVIDER_OPENAI_COMPATIBLE,
+}
+DEFAULT_ORGANIZER_PROVIDER = ORGANIZER_PROVIDER_DEEPSEEK
+DEFAULT_ORGANIZER_ENDPOINT = DEFAULT_DEEPSEEK_ENDPOINT
+DEFAULT_ORGANIZER_MODEL = DEFAULT_DEEPSEEK_MODEL
 DOUBAO_MODE_REALTIME_FINAL = "realtime_final"
 DOUBAO_MODE_REALTIME = "realtime"
 DOUBAO_MODE_STREAM_INPUT = "stream_input"
@@ -38,6 +58,22 @@ CONFIG_ENV_KEYS = [
     "DOUBAO_ASR_ENABLE_ITN",
     "DOUBAO_ASR_ENABLE_DDC",
     "DOUBAO_ASR_ENABLE_NONSTREAM",
+    "QWEN_ASR_ENDPOINT",
+    "QWEN_ASR_API_KEY",
+    "QWEN_ASR_MODEL",
+    "QWEN_ASR_LANGUAGE",
+    "QWEN_ASR_ENABLE_SERVER_VAD",
+    "QWEN_ASR_VAD_THRESHOLD",
+    "QWEN_ASR_VAD_SILENCE_MS",
+    "VOICE_INPUT_ORGANIZER_PROVIDER",
+    "VOICE_INPUT_ORGANIZER_ENDPOINT",
+    "VOICE_INPUT_ORGANIZER_API_KEY",
+    "VOICE_INPUT_ORGANIZER_MODEL",
+    "VOICE_INPUT_ORGANIZER_TIMEOUT",
+    "VOICE_INPUT_DEEPSEEK_ENDPOINT",
+    "VOICE_INPUT_DEEPSEEK_API_KEY",
+    "VOICE_INPUT_DEEPSEEK_MODEL",
+    "VOICE_INPUT_DEEPSEEK_TIMEOUT",
     "VOICE_INPUT_HOTKEY_BACKEND",
     "VOICE_INPUT_HOTKEY_KEY",
     "VOICE_INPUT_EVDEV_KEY",
@@ -167,6 +203,13 @@ def _get_int(values: Mapping[str, str], key: str, default: int) -> int:
     return int(value)
 
 
+def _get_float(values: Mapping[str, str], key: str, default: float) -> float:
+    value = values.get(key)
+    if value is None or value.strip() == "":
+        return default
+    return float(value)
+
+
 def _default_socket_path() -> str:
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
@@ -189,6 +232,20 @@ class AppConfig:
     doubao_enable_itn: bool = True
     doubao_enable_ddc: bool = False
     doubao_enable_nonstream: bool = True
+
+    qwen_endpoint: str = DEFAULT_QWEN_ASR_ENDPOINT
+    qwen_api_key: str = ""
+    qwen_model: str = DEFAULT_QWEN_ASR_MODEL
+    qwen_language: str = DEFAULT_QWEN_ASR_LANGUAGE
+    qwen_enable_server_vad: bool = True
+    qwen_vad_threshold: float = DEFAULT_QWEN_ASR_VAD_THRESHOLD
+    qwen_vad_silence_ms: int = DEFAULT_QWEN_ASR_VAD_SILENCE_MS
+
+    organizer_provider: str = DEFAULT_ORGANIZER_PROVIDER
+    organizer_endpoint: str = DEFAULT_ORGANIZER_ENDPOINT
+    organizer_api_key: str = ""
+    organizer_model: str = DEFAULT_ORGANIZER_MODEL
+    organizer_timeout: int = 45
 
     hotkey_backend: str = "auto"
     hotkey_key: str = "right_alt"
@@ -213,8 +270,9 @@ class AppConfig:
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, str]) -> "AppConfig":
+        organizer_provider = _get_organizer_provider(values)
         return cls(
-            asr_provider=values.get("VOICE_INPUT_ASR", values.get("ASR_PROVIDER", "mock")).lower(),
+            asr_provider=_get_asr_provider(values),
             mock_text=values.get("VOICE_INPUT_MOCK_TEXT", "这是一次语音输入测试。"),
             doubao_endpoint=values.get(
                 "DOUBAO_ASR_ENDPOINT",
@@ -232,6 +290,18 @@ class AppConfig:
             doubao_enable_itn=_get_bool(values, "DOUBAO_ASR_ENABLE_ITN", True),
             doubao_enable_ddc=_get_bool(values, "DOUBAO_ASR_ENABLE_DDC", False),
             doubao_enable_nonstream=_get_bool(values, "DOUBAO_ASR_ENABLE_NONSTREAM", True),
+            qwen_endpoint=values.get("QWEN_ASR_ENDPOINT", DEFAULT_QWEN_ASR_ENDPOINT).strip() or DEFAULT_QWEN_ASR_ENDPOINT,
+            qwen_api_key=values.get("QWEN_ASR_API_KEY", values.get("DASHSCOPE_API_KEY", "")).strip(),
+            qwen_model=values.get("QWEN_ASR_MODEL", DEFAULT_QWEN_ASR_MODEL).strip() or DEFAULT_QWEN_ASR_MODEL,
+            qwen_language=values.get("QWEN_ASR_LANGUAGE", DEFAULT_QWEN_ASR_LANGUAGE).strip() or DEFAULT_QWEN_ASR_LANGUAGE,
+            qwen_enable_server_vad=_get_bool(values, "QWEN_ASR_ENABLE_SERVER_VAD", True),
+            qwen_vad_threshold=_get_float(values, "QWEN_ASR_VAD_THRESHOLD", DEFAULT_QWEN_ASR_VAD_THRESHOLD),
+            qwen_vad_silence_ms=_get_int(values, "QWEN_ASR_VAD_SILENCE_MS", DEFAULT_QWEN_ASR_VAD_SILENCE_MS),
+            organizer_provider=organizer_provider,
+            organizer_endpoint=_get_organizer_endpoint(values, organizer_provider),
+            organizer_api_key=_get_organizer_api_key(values, organizer_provider),
+            organizer_model=_get_organizer_model(values, organizer_provider),
+            organizer_timeout=_get_organizer_timeout(values),
             hotkey_backend=values.get("VOICE_INPUT_HOTKEY_BACKEND", "auto").lower(),
             hotkey_key=values.get("VOICE_INPUT_HOTKEY_KEY", "right_alt"),
             evdev_device=values.get("VOICE_INPUT_EVDEV_DEVICE", ""),
@@ -254,6 +324,8 @@ class AppConfig:
         secret_fields = {
             "doubao_app_key",
             "doubao_access_key",
+            "qwen_api_key",
+            "organizer_api_key",
         }
         result: dict[str, str | int | bool] = {}
         for field in self.__dataclass_fields__:
@@ -281,6 +353,87 @@ def doubao_endpoint_for_mode(mode: str) -> str:
     if mode == DOUBAO_MODE_STREAM_INPUT:
         return DOUBAO_ENDPOINT_STREAM_INPUT
     return ""
+
+
+def _chat_completions_endpoint_from_base_url(base_url: str) -> str:
+    value = base_url.strip()
+    if not value:
+        return DEFAULT_ORGANIZER_ENDPOINT
+    value = value.rstrip("/")
+    if value.endswith("/chat/completions"):
+        return value
+    return f"{value}/chat/completions"
+
+
+def _get_organizer_provider(values: Mapping[str, str]) -> str:
+    configured = values.get("VOICE_INPUT_ORGANIZER_PROVIDER", DEFAULT_ORGANIZER_PROVIDER).strip().lower()
+    if configured in ORGANIZER_PROVIDERS:
+        return configured
+    return DEFAULT_ORGANIZER_PROVIDER
+
+
+def _get_organizer_endpoint(values: Mapping[str, str], provider: str) -> str:
+    configured = values.get("VOICE_INPUT_ORGANIZER_ENDPOINT", "").strip()
+    if configured:
+        return configured
+
+    legacy = values.get("VOICE_INPUT_DEEPSEEK_ENDPOINT", "").strip()
+    if legacy:
+        return legacy
+
+    base_url = values.get("VOICE_INPUT_ORGANIZER_BASE_URL", "").strip()
+    if not base_url and provider == ORGANIZER_PROVIDER_DEEPSEEK:
+        base_url = values.get("DEEPSEEK_BASE_URL", "").strip()
+    if not base_url and provider == ORGANIZER_PROVIDER_OPENAI_COMPATIBLE:
+        base_url = values.get("OPENAI_BASE_URL", "").strip()
+    if base_url:
+        return _chat_completions_endpoint_from_base_url(base_url)
+    return DEFAULT_ORGANIZER_ENDPOINT
+
+
+def _get_organizer_api_key(values: Mapping[str, str], provider: str) -> str:
+    configured = values.get("VOICE_INPUT_ORGANIZER_API_KEY", "").strip()
+    if configured:
+        return configured
+
+    legacy = values.get("VOICE_INPUT_DEEPSEEK_API_KEY", "").strip()
+    if legacy:
+        return legacy
+    if provider == ORGANIZER_PROVIDER_DEEPSEEK:
+        return values.get("DEEPSEEK_API_KEY", "").strip()
+    if provider == ORGANIZER_PROVIDER_OPENAI_COMPATIBLE:
+        return values.get("OPENAI_API_KEY", "").strip()
+    return ""
+
+
+def _get_organizer_model(values: Mapping[str, str], provider: str) -> str:
+    configured = values.get("VOICE_INPUT_ORGANIZER_MODEL", "").strip()
+    if configured:
+        return configured
+
+    legacy = values.get("VOICE_INPUT_DEEPSEEK_MODEL", "").strip()
+    if legacy:
+        return legacy
+    if provider == ORGANIZER_PROVIDER_DEEPSEEK:
+        return values.get("DEEPSEEK_MODEL", DEFAULT_ORGANIZER_MODEL).strip() or DEFAULT_ORGANIZER_MODEL
+    if provider == ORGANIZER_PROVIDER_OPENAI_COMPATIBLE:
+        return values.get("OPENAI_MODEL", DEFAULT_ORGANIZER_MODEL).strip() or DEFAULT_ORGANIZER_MODEL
+    return DEFAULT_ORGANIZER_MODEL
+
+
+def _get_organizer_timeout(values: Mapping[str, str]) -> int:
+    return _get_int(
+        values,
+        "VOICE_INPUT_ORGANIZER_TIMEOUT",
+        _get_int(values, "VOICE_INPUT_DEEPSEEK_TIMEOUT", 45),
+    )
+
+
+def _get_asr_provider(values: Mapping[str, str]) -> str:
+    configured = values.get("VOICE_INPUT_ASR", values.get("ASR_PROVIDER", ASR_PROVIDER_MOCK)).strip().lower()
+    if configured in QWEN_ASR_PROVIDERS:
+        return ASR_PROVIDER_QWEN
+    return configured or ASR_PROVIDER_MOCK
 
 
 def _get_doubao_mode(values: Mapping[str, str]) -> str:
@@ -327,6 +480,18 @@ def config_to_env(config: AppConfig) -> dict[str, str]:
         "DOUBAO_ASR_ENABLE_ITN": "true" if config.doubao_enable_itn else "false",
         "DOUBAO_ASR_ENABLE_DDC": "true" if config.doubao_enable_ddc else "false",
         "DOUBAO_ASR_ENABLE_NONSTREAM": "true" if config.effective_doubao_enable_nonstream() else "false",
+        "QWEN_ASR_ENDPOINT": config.qwen_endpoint,
+        "QWEN_ASR_API_KEY": config.qwen_api_key,
+        "QWEN_ASR_MODEL": config.qwen_model,
+        "QWEN_ASR_LANGUAGE": config.qwen_language,
+        "QWEN_ASR_ENABLE_SERVER_VAD": "true" if config.qwen_enable_server_vad else "false",
+        "QWEN_ASR_VAD_THRESHOLD": str(config.qwen_vad_threshold),
+        "QWEN_ASR_VAD_SILENCE_MS": str(config.qwen_vad_silence_ms),
+        "VOICE_INPUT_ORGANIZER_PROVIDER": config.organizer_provider,
+        "VOICE_INPUT_ORGANIZER_ENDPOINT": config.organizer_endpoint,
+        "VOICE_INPUT_ORGANIZER_API_KEY": config.organizer_api_key,
+        "VOICE_INPUT_ORGANIZER_MODEL": config.organizer_model,
+        "VOICE_INPUT_ORGANIZER_TIMEOUT": str(config.organizer_timeout),
         "VOICE_INPUT_HOTKEY_BACKEND": config.hotkey_backend,
         "VOICE_INPUT_HOTKEY_KEY": config.hotkey_key,
         "VOICE_INPUT_EVDEV_KEY": config.evdev_key,

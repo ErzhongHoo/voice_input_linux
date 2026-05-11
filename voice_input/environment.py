@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from voice_input.audio.devices import list_input_devices
-from voice_input.config import AppConfig
+from voice_input.config import ASR_PROVIDER_QWEN, DOUBAO_ASR_PROVIDERS, AppConfig
 from voice_input.hotkey.evdev_backend import EvdevHotkeyBackend
 from voice_input.hotkey.pynput_backend import PynputHotkeyBackend
 from voice_input.inject.clipboard_injector import ClipboardInjector
@@ -36,6 +36,7 @@ def run_environment_checks(config: AppConfig) -> list[EnvironmentCheck]:
     checks.extend(_platform_checks())
     checks.extend(_audio_checks(config))
     checks.extend(_asr_checks(config))
+    checks.extend(_organizer_checks(config))
     checks.extend(_hotkey_checks(config))
     checks.extend(_injection_checks(config))
     checks.extend(_system_checks())
@@ -155,7 +156,35 @@ def _audio_checks(config: AppConfig) -> list[EnvironmentCheck]:
 def _asr_checks(config: AppConfig) -> list[EnvironmentCheck]:
     if config.asr_provider == "mock":
         return [EnvironmentCheck("ASR", "模式", "ok", "mock，本地闭环测试")]
-    if config.asr_provider not in {"doubao", "doubao_big_asr", "bigmodel"}:
+    if config.asr_provider == ASR_PROVIDER_QWEN:
+        missing = []
+        if not config.qwen_endpoint:
+            missing.append("Endpoint")
+        if not config.qwen_api_key:
+            missing.append("API Key")
+        if not config.qwen_model:
+            missing.append("Model")
+        if missing:
+            return [
+                EnvironmentCheck(
+                    "ASR",
+                    "千问配置",
+                    "fail",
+                    "缺少 " + "、".join(missing),
+                    "在 设置 -> ASR 中补齐。Key 不会写入日志。",
+                )
+            ]
+        return [
+            EnvironmentCheck(
+                "ASR",
+                "千问配置",
+                "ok",
+                config.qwen_model,
+                f"Endpoint: {config.qwen_endpoint}；Language: {config.qwen_language}",
+            )
+        ]
+
+    if config.asr_provider not in DOUBAO_ASR_PROVIDERS:
         return [EnvironmentCheck("ASR", "模式", "fail", f"未知 ASR provider: {config.asr_provider}")]
 
     missing = []
@@ -187,6 +216,39 @@ def _asr_checks(config: AppConfig) -> list[EnvironmentCheck]:
             f"Resource ID: {config.doubao_resource_id}",
         )
     ]
+
+
+def _organizer_checks(config: AppConfig) -> list[EnvironmentCheck]:
+    provider = _organizer_provider_label(config.organizer_provider)
+    if not config.organizer_api_key:
+        return [
+            EnvironmentCheck(
+                "整理模型",
+                provider,
+                "warn",
+                "未配置 API Key",
+                "轻点右 Alt 的整理模式会回退输入原始识别文本。",
+            )
+        ]
+    if not config.organizer_endpoint:
+        return [EnvironmentCheck("整理模型", provider, "fail", "未配置 Endpoint")]
+    return [
+        EnvironmentCheck(
+            "整理模型",
+            provider,
+            "ok",
+            f"{config.organizer_model} 配置完整",
+            config.organizer_endpoint,
+        )
+    ]
+
+
+def _organizer_provider_label(provider: str) -> str:
+    if provider == "deepseek":
+        return "DeepSeek"
+    if provider == "openai_compatible":
+        return "OpenAI 兼容接口"
+    return provider or "未配置"
 
 
 def _hotkey_checks(config: AppConfig) -> list[EnvironmentCheck]:

@@ -20,6 +20,7 @@ class EvdevHotkeyBackend(HotkeyBackend):
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._devices: list[Any] = []
+        self._pressed = False
 
     def is_available(self) -> bool:
         try:
@@ -41,7 +42,11 @@ class EvdevHotkeyBackend(HotkeyBackend):
                 LOGGER.debug("Cannot probe input device %s: %s", path, exc)
         return False
 
-    def start(self, callback: Callable[[], None]) -> None:
+    def start(
+        self,
+        callback: Callable[[], None],
+        release_callback: Callable[[], None] | None = None,
+    ) -> None:
         try:
             from evdev import InputDevice, ecodes, list_devices
         except Exception as exc:  # noqa: BLE001
@@ -70,9 +75,10 @@ class EvdevHotkeyBackend(HotkeyBackend):
             raise HotkeyError(f"evdev 无法监听 {self.key_code}: {details}")
 
         self._stop.clear()
+        self._pressed = False
         self._thread = threading.Thread(
             target=self._read_loop,
-            args=(callback, key_value),
+            args=(callback, release_callback, key_value),
             daemon=True,
             name="evdev-hotkey",
         )
@@ -86,11 +92,17 @@ class EvdevHotkeyBackend(HotkeyBackend):
             except OSError:
                 pass
         self._devices = []
+        self._pressed = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
         self._thread = None
 
-    def _read_loop(self, callback: Callable[[], None], key_value: int) -> None:
+    def _read_loop(
+        self,
+        callback: Callable[[], None],
+        release_callback: Callable[[], None] | None,
+        key_value: int,
+    ) -> None:
         from evdev import categorize, ecodes
 
         while not self._stop.is_set():
@@ -100,8 +112,15 @@ class EvdevHotkeyBackend(HotkeyBackend):
                         if event.type != ecodes.EV_KEY:
                             continue
                         key_event = categorize(event)
-                        if key_event.scancode == key_value and key_event.keystate == key_event.key_down:
+                        if key_event.scancode != key_value:
+                            continue
+                        if key_event.keystate == key_event.key_down and not self._pressed:
+                            self._pressed = True
                             callback()
+                        elif key_event.keystate == key_event.key_up and self._pressed:
+                            self._pressed = False
+                            if release_callback is not None:
+                                release_callback()
                 except BlockingIOError:
                     continue
                 except OSError as exc:
@@ -111,4 +130,3 @@ class EvdevHotkeyBackend(HotkeyBackend):
                     except ValueError:
                         pass
             self._stop.wait(0.02)
-

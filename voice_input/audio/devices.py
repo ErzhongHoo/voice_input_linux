@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import threading
 
 import numpy as np
+
+
+LOGGER = logging.getLogger(__name__)
+_SOUNDDEVICE_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,14 +28,17 @@ class InputDeviceInfo:
         return f"{self.index}: {self.name} ({self.channels}ch{rate})"
 
 
-def list_input_devices() -> list[InputDeviceInfo]:
+def list_input_devices(rescan: bool = False) -> list[InputDeviceInfo]:
     try:
         import sounddevice as sd
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"sounddevice 不可用: {exc}") from exc
 
     try:
-        raw_devices = sd.query_devices()
+        with _SOUNDDEVICE_LOCK:
+            if rescan:
+                _rescan_sounddevice(sd)
+            raw_devices = sd.query_devices()
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"无法读取音频输入设备: {exc}") from exc
 
@@ -63,17 +72,18 @@ def measure_input_device_level(
 
     normalized_device = _normalize_device(device)
     try:
-        info = sd.query_devices(normalized_device, "input")
-        sample_rate = int(float(info.get("default_samplerate") or 48000))
-        frames = max(1, int(sample_rate * duration_seconds))
-        data = sd.rec(
-            frames,
-            samplerate=sample_rate,
-            channels=channels,
-            dtype="int16",
-            device=normalized_device,
-        )
-        sd.wait()
+        with _SOUNDDEVICE_LOCK:
+            info = sd.query_devices(normalized_device, "input")
+            sample_rate = int(float(info.get("default_samplerate") or 48000))
+            frames = max(1, int(sample_rate * duration_seconds))
+            data = sd.rec(
+                frames,
+                samplerate=sample_rate,
+                channels=channels,
+                dtype="int16",
+                device=normalized_device,
+            )
+            sd.wait()
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"麦克风测试失败: {exc}") from exc
 
@@ -94,3 +104,31 @@ def _normalize_device(device: str | int | None) -> str | int | None:
             return int(value)
         return value
     return device
+
+
+def _rescan_sounddevice(sd: object) -> None:
+    terminate = getattr(sd, "_terminate", None)
+    initialize = getattr(sd, "_initialize", None)
+    if not callable(terminate) or not callable(initialize):
+        return
+
+    try:
+        initialized = int(getattr(sd, "_initialized", 1) or 1)
+    except (TypeError, ValueError):
+        initialized = 1
+    initialized = max(1, initialized)
+
+    terminated = 0
+    try:
+        for _ in range(initialized):
+            terminate()
+            terminated += 1
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("Could not terminate PortAudio before device rescan: %s", exc)
+    finally:
+        for _ in range(terminated):
+            try:
+                initialize()
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.debug("Could not reinitialize PortAudio after device rescan: %s", exc)
+                break

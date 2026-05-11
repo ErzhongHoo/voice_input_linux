@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -29,10 +31,19 @@ from PySide6.QtWidgets import (
 
 from voice_input.audio.devices import InputDeviceInfo, list_input_devices, measure_input_device_level
 from voice_input.config import (
+    ASR_PROVIDER_QWEN,
     DOUBAO_MODE_CUSTOM,
     DOUBAO_MODE_REALTIME,
     DOUBAO_MODE_REALTIME_FINAL,
     DOUBAO_MODE_STREAM_INPUT,
+    DEFAULT_ORGANIZER_ENDPOINT,
+    DEFAULT_ORGANIZER_MODEL,
+    DEFAULT_QWEN_ASR_ENDPOINT,
+    DEFAULT_QWEN_ASR_LANGUAGE,
+    DEFAULT_QWEN_ASR_MODEL,
+    DEFAULT_QWEN_ASR_VAD_SILENCE_MS,
+    ORGANIZER_PROVIDER_DEEPSEEK,
+    ORGANIZER_PROVIDER_OPENAI_COMPATIBLE,
     AppConfig,
     config_to_env,
     doubao_endpoint_for_mode,
@@ -65,7 +76,8 @@ class SettingsDialog(QDialog):
 
         self.asr_provider = NoWheelComboBox()
         self.asr_provider.addItem("豆包 ASR", "doubao")
-        self.asr_provider.setCurrentIndex(0)
+        self.asr_provider.addItem("阿里云百炼千问 ASR", ASR_PROVIDER_QWEN)
+        _set_combo_data(self.asr_provider, config.asr_provider)
 
         self.mock_text = QLineEdit(config.mock_text)
         self.doubao_mode = NoWheelComboBox()
@@ -88,6 +100,33 @@ class SettingsDialog(QDialog):
         self.doubao_enable_nonstream = QCheckBox("二遍识别")
         self.doubao_enable_nonstream.setChecked(config.effective_doubao_enable_nonstream())
         self._handle_doubao_mode_changed()
+        self.qwen_endpoint = QLineEdit(config.qwen_endpoint)
+        self.qwen_api_key = SecretLineEdit(config.qwen_api_key)
+        self.qwen_model = QLineEdit(config.qwen_model)
+        self.qwen_language = QLineEdit(config.qwen_language)
+        self.qwen_enable_server_vad = QCheckBox("服务端 VAD 自动断句")
+        self.qwen_enable_server_vad.setChecked(config.qwen_enable_server_vad)
+        self.qwen_vad_threshold = NoWheelDoubleSpinBox()
+        self.qwen_vad_threshold.setRange(-1.0, 1.0)
+        self.qwen_vad_threshold.setSingleStep(0.1)
+        self.qwen_vad_threshold.setDecimals(2)
+        self.qwen_vad_threshold.setValue(config.qwen_vad_threshold)
+        self.qwen_vad_silence_ms = NoWheelSpinBox()
+        self.qwen_vad_silence_ms.setRange(200, 6000)
+        self.qwen_vad_silence_ms.setSingleStep(100)
+        self.qwen_vad_silence_ms.setValue(config.qwen_vad_silence_ms)
+        self.organizer_provider = NoWheelComboBox()
+        self.organizer_provider.addItem("DeepSeek", ORGANIZER_PROVIDER_DEEPSEEK)
+        self.organizer_provider.addItem("OpenAI 兼容接口", ORGANIZER_PROVIDER_OPENAI_COMPATIBLE)
+        _set_combo_data(self.organizer_provider, config.organizer_provider)
+        self.organizer_provider.currentIndexChanged.connect(self._handle_organizer_provider_changed)
+        self.organizer_endpoint = QLineEdit(config.organizer_endpoint)
+        self.organizer_api_key = SecretLineEdit(config.organizer_api_key)
+        self.organizer_model = QLineEdit(config.organizer_model)
+        self.organizer_timeout = NoWheelSpinBox()
+        self.organizer_timeout.setRange(5, 180)
+        self.organizer_timeout.setSingleStep(5)
+        self.organizer_timeout.setValue(config.organizer_timeout)
 
         self.hotkey_backend = NoWheelComboBox()
         self.hotkey_backend.addItems(["auto", "pynput", "evdev", "none"])
@@ -117,6 +156,15 @@ class SettingsDialog(QDialog):
         self.copy_toggle_command.clicked.connect(self._copy_toggle_command)
         self.prepare_wayland_button = QPushButton("安装并启动后台服务")
         self.prepare_wayland_button.clicked.connect(self._prepare_wayland_shortcut)
+        self.test_asr_connection = QPushButton("测试")
+        self.test_asr_connection.setMinimumWidth(96)
+        self.test_asr_connection.clicked.connect(lambda: self._start_model_connection_test("asr"))
+        self.test_qwen_connection = QPushButton("测试")
+        self.test_qwen_connection.setMinimumWidth(96)
+        self.test_qwen_connection.clicked.connect(lambda: self._start_model_connection_test("qwen_asr"))
+        self.test_organizer_connection = QPushButton("测试")
+        self.test_organizer_connection.setMinimumWidth(96)
+        self.test_organizer_connection.clicked.connect(lambda: self._start_model_connection_test("organizer"))
 
         self.sample_rate = NoWheelSpinBox()
         self.sample_rate.setRange(8000, 96000)
@@ -133,10 +181,10 @@ class SettingsDialog(QDialog):
         self.input_device_combo.setEditable(True)
         self.input_device_combo.setMinimumWidth(380)
         self.refresh_input_devices = QPushButton("刷新")
-        self.refresh_input_devices.setFixedWidth(72)
-        self.refresh_input_devices.clicked.connect(lambda: self._populate_input_devices(show_error=True))
+        self.refresh_input_devices.setMinimumWidth(96)
+        self.refresh_input_devices.clicked.connect(lambda: self._populate_input_devices(show_error=True, rescan=True))
         self.test_input_device = QPushButton("测试")
-        self.test_input_device.setFixedWidth(72)
+        self.test_input_device.setMinimumWidth(96)
         self.test_input_device.clicked.connect(self._toggle_input_device_test)
         self.input_level = QProgressBar()
         self.input_level.setRange(0, 100)
@@ -149,9 +197,18 @@ class SettingsDialog(QDialog):
         self._input_test_timer = QTimer(self)
         self._input_test_timer.setInterval(250)
         self._input_test_timer.timeout.connect(self._update_input_test_time)
-        self._populate_input_devices()
+        self._input_device_refresh_timer = QTimer(self)
+        self._input_device_refresh_timer.setInterval(5000)
+        self._input_device_refresh_timer.timeout.connect(self._auto_refresh_input_devices)
+        self._populate_input_devices(rescan=True)
+        self._input_device_refresh_timer.start()
         self._test_thread: QThread | None = None
         self._test_worker: MicrophoneTestWorker | None = None
+        self._connection_test_thread: threading.Thread | None = None
+        self._connection_test_closing = False
+        self._connection_test_signals = ModelConnectionSignals(self)
+        self._connection_test_signals.finished.connect(self._handle_model_connection_success)
+        self._connection_test_signals.failed.connect(self._handle_model_connection_failed)
 
         self.overlay_theme = NoWheelComboBox()
         self.overlay_theme.addItems(["auto", "light", "dark"])
@@ -185,6 +242,13 @@ class SettingsDialog(QDialog):
             self.app_key.line,
             self.access_key.line,
             self.resource_id,
+            self.qwen_endpoint,
+            self.qwen_api_key.line,
+            self.qwen_model,
+            self.qwen_language,
+            self.organizer_endpoint,
+            self.organizer_api_key.line,
+            self.organizer_model,
             self.hotkey_key,
             self.evdev_key,
             self.evdev_device,
@@ -195,6 +259,7 @@ class SettingsDialog(QDialog):
         combo_fields = [
             self.asr_provider,
             self.doubao_mode,
+            self.organizer_provider,
             self.hotkey_backend,
             self.injector_backend,
             self.paste_hotkey,
@@ -206,7 +271,14 @@ class SettingsDialog(QDialog):
             combo.currentIndexChanged.connect(self._schedule_auto_save)
         self.input_device_combo.editTextChanged.connect(self._schedule_auto_save)
 
-        spin_fields = [self.sample_rate, self.channels, self.chunk_ms]
+        spin_fields = [
+            self.sample_rate,
+            self.channels,
+            self.chunk_ms,
+            self.qwen_vad_threshold,
+            self.qwen_vad_silence_ms,
+            self.organizer_timeout,
+        ]
         for spin in spin_fields:
             spin.valueChanged.connect(self._schedule_auto_save)
 
@@ -215,6 +287,7 @@ class SettingsDialog(QDialog):
             self.doubao_enable_itn,
             self.doubao_enable_ddc,
             self.doubao_enable_nonstream,
+            self.qwen_enable_server_vad,
             self.prefer_fcitx5,
             self.paste_at_mouse,
             self.append_final_punctuation,
@@ -248,6 +321,18 @@ class SettingsDialog(QDialog):
             doubao_enable_itn=self.doubao_enable_itn.isChecked(),
             doubao_enable_ddc=self.doubao_enable_ddc.isChecked(),
             doubao_enable_nonstream=self.doubao_enable_nonstream.isChecked(),
+            qwen_endpoint=self.qwen_endpoint.text().strip() or DEFAULT_QWEN_ASR_ENDPOINT,
+            qwen_api_key=self.qwen_api_key.text().strip(),
+            qwen_model=self.qwen_model.text().strip() or DEFAULT_QWEN_ASR_MODEL,
+            qwen_language=self.qwen_language.text().strip() or DEFAULT_QWEN_ASR_LANGUAGE,
+            qwen_enable_server_vad=self.qwen_enable_server_vad.isChecked(),
+            qwen_vad_threshold=self.qwen_vad_threshold.value(),
+            qwen_vad_silence_ms=self.qwen_vad_silence_ms.value() or DEFAULT_QWEN_ASR_VAD_SILENCE_MS,
+            organizer_provider=str(self.organizer_provider.currentData() or ORGANIZER_PROVIDER_DEEPSEEK),
+            organizer_endpoint=self.organizer_endpoint.text().strip(),
+            organizer_api_key=self.organizer_api_key.text().strip(),
+            organizer_model=self.organizer_model.text().strip(),
+            organizer_timeout=self.organizer_timeout.value(),
             hotkey_backend=self.hotkey_backend.currentText(),
             hotkey_key=self.hotkey_key.text().strip() or "right_alt",
             evdev_device=self.evdev_device.text().strip(),
@@ -272,7 +357,7 @@ class SettingsDialog(QDialog):
         tab = QWidget()
         form = QFormLayout(tab)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        form.addRow("识别服务", self.asr_provider)
+        form.addRow("识别服务", self._field_with_button(self.asr_provider, self.test_asr_connection))
         form.addRow(_separator("豆包 / 火山引擎"))
         form.addRow("识别模式", self.doubao_mode)
         form.addRow("Endpoint", self.endpoint)
@@ -283,7 +368,21 @@ class SettingsDialog(QDialog):
         form.addRow("", self.doubao_enable_itn)
         form.addRow("", self.doubao_enable_ddc)
         form.addRow("", self.doubao_enable_nonstream)
-        note = QLabel("Key 只保存到本机配置文件，不会写入日志。下一次录音使用新的 ASR 配置。")
+        form.addRow(_separator("阿里云百炼 / 千问 ASR"))
+        form.addRow("Endpoint", self.qwen_endpoint)
+        form.addRow("API Key", self.qwen_api_key)
+        form.addRow("Model", self._field_with_button(self.qwen_model, self.test_qwen_connection))
+        form.addRow("Language", self.qwen_language)
+        form.addRow("", self.qwen_enable_server_vad)
+        form.addRow("VAD 阈值", self.qwen_vad_threshold)
+        form.addRow("静音断句 ms", self.qwen_vad_silence_ms)
+        form.addRow(_separator("整理模型"))
+        form.addRow("Provider", self._field_with_button(self.organizer_provider, self.test_organizer_connection))
+        form.addRow("Endpoint", self.organizer_endpoint)
+        form.addRow("API Key", self.organizer_api_key)
+        form.addRow("Model", self.organizer_model)
+        form.addRow("Timeout 秒", self.organizer_timeout)
+        note = QLabel("Key 只保存到本机配置文件，不会写入日志。下一次录音使用新的模型配置。")
         note.setWordWrap(True)
         form.addRow(note)
         return tab
@@ -299,6 +398,15 @@ class SettingsDialog(QDialog):
         elif mode in {DOUBAO_MODE_REALTIME, DOUBAO_MODE_STREAM_INPUT}:
             self.doubao_enable_nonstream.setChecked(False)
         self.doubao_enable_nonstream.setEnabled(mode == DOUBAO_MODE_CUSTOM)
+        self._schedule_auto_save()
+
+    def _handle_organizer_provider_changed(self) -> None:
+        provider = str(self.organizer_provider.currentData() or ORGANIZER_PROVIDER_DEEPSEEK)
+        if provider == ORGANIZER_PROVIDER_DEEPSEEK:
+            if not self.organizer_endpoint.text().strip():
+                self.organizer_endpoint.setText(DEFAULT_ORGANIZER_ENDPOINT)
+            if not self.organizer_model.text().strip():
+                self.organizer_model.setText(DEFAULT_ORGANIZER_MODEL)
         self._schedule_auto_save()
 
     def _desktop_tab(self) -> QWidget:
@@ -331,6 +439,83 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.toggle_command, 1)
         layout.addWidget(self.copy_toggle_command)
         return row
+
+    def _field_with_button(self, field: QWidget, button: QPushButton) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(field, 1)
+        layout.addWidget(button)
+        return row
+
+    def _start_model_connection_test(self, kind: str) -> None:
+        if self._connection_test_thread is not None and self._connection_test_thread.is_alive():
+            QMessageBox.information(self, "连通性测试", "已有测试正在进行。")
+            return
+        config = AppConfig.from_mapping(self.to_env())
+        if kind == "qwen_asr":
+            config.asr_provider = ASR_PROVIDER_QWEN
+        button = self._connection_test_button(kind)
+        button.setText("测试中")
+        for test_button in self._connection_test_buttons():
+            test_button.setEnabled(False)
+
+        self._connection_test_closing = False
+        thread = threading.Thread(
+            target=self._run_model_connection_test,
+            args=(kind, config),
+            daemon=True,
+        )
+        self._connection_test_thread = thread
+        thread.start()
+
+    def _run_model_connection_test(self, kind: str, config: AppConfig) -> None:
+        try:
+            from voice_input.model_checks import check_asr_connection, check_organizer_connection
+
+            if kind in {"asr", "qwen_asr"}:
+                message = check_asr_connection(config)
+            elif kind == "organizer":
+                message = check_organizer_connection(config)
+            else:
+                raise ValueError(f"未知测试类型: {kind}")
+        except Exception as exc:  # noqa: BLE001
+            if not self._connection_test_closing:
+                self._connection_test_signals.failed.emit(kind, str(exc))
+            return
+        if not self._connection_test_closing:
+            self._connection_test_signals.finished.emit(kind, message)
+
+    def _handle_model_connection_success(self, kind: str, message: str) -> None:
+        if self._connection_test_closing:
+            return
+        title = _connection_test_title(kind)
+        QMessageBox.information(self, title, message)
+        self._clear_model_connection_test()
+
+    def _handle_model_connection_failed(self, kind: str, message: str) -> None:
+        if self._connection_test_closing:
+            return
+        title = _connection_test_title(kind, failed=True)
+        QMessageBox.warning(self, title, message)
+        self._clear_model_connection_test()
+
+    def _clear_model_connection_test(self) -> None:
+        self._connection_test_thread = None
+        for button in self._connection_test_buttons():
+            button.setText("测试")
+            button.setEnabled(True)
+
+    def _connection_test_button(self, kind: str) -> QPushButton:
+        if kind == "qwen_asr":
+            return self.test_qwen_connection
+        if kind == "organizer":
+            return self.test_organizer_connection
+        return self.test_asr_connection
+
+    def _connection_test_buttons(self) -> list[QPushButton]:
+        return [self.test_asr_connection, self.test_qwen_connection, self.test_organizer_connection]
 
     def _copy_toggle_command(self) -> None:
         try:
@@ -475,6 +660,8 @@ class SettingsDialog(QDialog):
         self.input_test_time.setText(f"{elapsed // 60:02d}:{elapsed % 60:02d}")
 
     def closeEvent(self, event: object) -> None:  # noqa: D401
+        self._connection_test_closing = True
+        self._input_device_refresh_timer.stop()
         if self._auto_save_timer.isActive():
             self._auto_save_timer.stop()
             self._auto_save()
@@ -484,7 +671,12 @@ class SettingsDialog(QDialog):
             self._test_thread.wait(1000)
         super().closeEvent(event)
 
-    def _populate_input_devices(self, show_error: bool = False) -> None:
+    def _auto_refresh_input_devices(self) -> None:
+        if not self.isVisible() or self._test_thread is not None or self.input_device_combo.hasFocus():
+            return
+        self._populate_input_devices(rescan=True)
+
+    def _populate_input_devices(self, show_error: bool = False, rescan: bool = False) -> None:
         previous = (
             self._selected_input_device()
             if self.input_device_combo.count()
@@ -496,7 +688,7 @@ class SettingsDialog(QDialog):
 
         devices: list[InputDeviceInfo] = []
         try:
-            devices = list_input_devices()
+            devices = list_input_devices(rescan=rescan)
         except Exception as exc:  # noqa: BLE001
             if previous:
                 self.input_device_combo.addItem(f"当前配置: {previous}", previous)
@@ -564,6 +756,11 @@ class NoWheelSpinBox(QSpinBox):
         event.ignore()
 
 
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        event.ignore()
+
+
 def _set_combo_data(combo: QComboBox, data: str) -> None:
     for index in range(combo.count()):
         if combo.itemData(index) == data:
@@ -577,6 +774,16 @@ def _separator(text: str) -> QFrame:
     frame.setToolTip(text)
     frame.setAccessibleName(text)
     return frame
+
+
+def _connection_test_title(kind: str, failed: bool = False) -> str:
+    if kind == "qwen_asr":
+        title = "阿里云百炼千问 ASR 测试"
+    elif kind == "organizer":
+        title = "整理模型测试"
+    else:
+        title = "识别模型测试"
+    return f"{title}失败" if failed else title
 
 
 class MicrophoneLevelAnimation(QWidget):
@@ -609,6 +816,11 @@ class MicrophoneLevelAnimation(QWidget):
             x = index * (bar_width + gap)
             painter.drawRoundedRect(x, center - height / 2, bar_width, height, 2, 2)
         painter.end()
+
+
+class ModelConnectionSignals(QObject):
+    finished = Signal(str, str)
+    failed = Signal(str, str)
 
 
 class MicrophoneTestWorker(QObject):

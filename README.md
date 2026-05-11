@@ -1,13 +1,13 @@
 # Voice Input Linux
 
-Linux 桌面语音输入工具。按快捷键开始录音，再按一次停止；应用会把麦克风语音发送到你配置的 ASR 服务，拿到识别文本后粘贴到当前输入位置。
+Linux 桌面语音输入工具。长按右 Alt 可做短句输入；轻点右 Alt 开始长录音、再次轻点停止并进入整理模式。应用会把麦克风语音发送到你配置的 ASR 服务，拿到文本后粘贴到当前输入位置。
 
-> 这个项目不是火山引擎或豆包官方客户端。使用豆包 ASR 时，你需要自行开通火山引擎语音识别服务并配置自己的 App Key / Access Key。
+> 这个项目不是火山引擎、豆包或阿里云百炼官方客户端。使用在线 ASR 时，你需要自行开通对应语音识别服务并配置自己的密钥。
 
 ## 功能
 
 - 系统托盘后台常驻，支持控制面板和轻量悬浮窗。
-- 默认右 Alt 切换录音，也可绑定桌面环境的全局快捷键。
+- 默认右 Alt 支持长按短句输入、轻点长录音整理模式，也可绑定桌面环境的全局快捷键。
 - 支持 X11 和 Wayland；Wayland 推荐配合 `ydotoold` 完成自动点击和粘贴。
 - 接入火山引擎 / 豆包大模型语音识别，支持实时识别、二遍识别和整句返回模式。
 - 支持模型自动标点、数字规整、语义顺滑，以及应用侧“末尾句号”开关。
@@ -54,7 +54,7 @@ chmod +x VoiceInputLinux-*-x86_64.AppImage
 首次运行会打开控制面板。建议先做三件事：
 
 1. 打开“环境检查”，确认麦克风、ASR 配置和输入 backend 是否可用。
-2. 打开“模型”页，填写豆包 ASR 的 App Key / Access Key。
+2. 打开“模型”页，选择 ASR 服务，并填写对应密钥。
 3. 如果使用 Wayland，按下文配置 `ydotoold`。
 
 安装桌面入口和自启动：
@@ -111,7 +111,7 @@ sudo dnf install xdotool xclip
 APPIMAGE_EXTRACT_AND_RUN=1 ./VoiceInputLinux-*-x86_64.AppImage
 ```
 
-## 配置豆包 ASR
+## 配置 ASR
 
 配置文件默认位置：
 
@@ -139,6 +139,22 @@ DOUBAO_ASR_ENABLE_ITN=true
 DOUBAO_ASR_ENABLE_DDC=false
 DOUBAO_ASR_ENABLE_NONSTREAM=true
 
+# 如果使用阿里云百炼千问实时语音识别：
+# VOICE_INPUT_ASR=qwen
+QWEN_ASR_ENDPOINT=wss://dashscope.aliyuncs.com/api-ws/v1/realtime
+QWEN_ASR_API_KEY=你的百炼 API Key
+QWEN_ASR_MODEL=qwen3-asr-flash-realtime
+QWEN_ASR_LANGUAGE=zh
+QWEN_ASR_ENABLE_SERVER_VAD=true
+QWEN_ASR_VAD_THRESHOLD=0.0
+QWEN_ASR_VAD_SILENCE_MS=400
+
+VOICE_INPUT_ORGANIZER_PROVIDER=deepseek
+VOICE_INPUT_ORGANIZER_ENDPOINT=https://api.deepseek.com/chat/completions
+VOICE_INPUT_ORGANIZER_API_KEY=
+VOICE_INPUT_ORGANIZER_MODEL=deepseek-v4-flash
+VOICE_INPUT_ORGANIZER_TIMEOUT=45
+
 VOICE_INPUT_HOTKEY_BACKEND=auto
 VOICE_INPUT_HOTKEY_KEY=right_alt
 
@@ -162,6 +178,14 @@ volc.seedasr.sauc.concurrent  # 并发版
 
 如果你在火山控制台开通的是并发版，请改为 `volc.seedasr.sauc.concurrent`。
 
+阿里云百炼千问实时语音识别使用 WebSocket Realtime API。北京地域默认 Endpoint 是：
+
+```text
+wss://dashscope.aliyuncs.com/api-ws/v1/realtime
+```
+
+`QWEN_ASR_LANGUAGE=zh` 表示中文普通话/部分方言；也可按百炼文档改为 `en`、`yue`、`ja` 等语言代码。`QWEN_ASR_ENABLE_SERVER_VAD=true` 时由服务端自动断句；关闭后应用会在停止录音时提交整段音频。
+
 ## 识别模式
 
 可以在控制面板“模型 -> 识别模式”里修改：
@@ -178,6 +202,23 @@ volc.seedasr.sauc.concurrent  # 并发版
 - `VOICE_INPUT_APPEND_FINAL_PUNCTUATION=false`：不自动补末尾 `。` 或 `.`，并删除 ASR 返回的最终句号。
 - `DOUBAO_ASR_ENABLE_PUNC=false`：关闭模型自动标点。模型返回的逗号、句号、问号等都会受影响。
 - 这两个开关互相独立。前者只控制最终文本末尾，后者控制发给豆包 ASR 的请求参数。
+
+控制面板“模型”页里，识别服务和整理模型旁边都有“测试”按钮，可用当前表单内容检查服务是否连通，不需要先保存。
+
+## 右 Alt 手势
+
+内置右 Alt 监听会区分长按和轻点：
+
+- 长按右 Alt：按下即开始录音，松开停止，按原来的短句输入流程直接粘贴识别文本。
+- 轻点右 Alt：开始长录音；再次轻点停止，识别文本会先交给整理模型，再粘贴结果。
+
+整理模式使用 OpenAI-compatible Chat Completions 接口。Provider 可在控制面板里选择 `DeepSeek` 或 `OpenAI 兼容接口`。至少需要配置：
+
+```bash
+VOICE_INPUT_ORGANIZER_API_KEY=你的 API Key
+```
+
+DeepSeek 是默认 provider，默认模型为 `deepseek-v4-flash`。如果整理模型调用失败，应用会回退输入本地后处理后的 ASR 文本，并通过托盘提示错误。
 
 ## Wayland：配置 ydotoold
 

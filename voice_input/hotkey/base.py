@@ -16,10 +16,13 @@ class HotkeyBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def start(self, callback: Callable[[], None]) -> None:
+    def start(
+        self,
+        callback: Callable[[], None],
+        release_callback: Callable[[], None] | None = None,
+    ) -> None:
         raise NotImplementedError
 
     @abstractmethod
     def stop(self) -> None:
         raise NotImplementedError
-

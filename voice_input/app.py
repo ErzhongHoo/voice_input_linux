@@ -9,23 +9,26 @@ import queue
 import socket
 import sys
 import threading
+import time
 from typing import Callable
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .asr.base import AsrClient, AsrError
 from .asr.doubao_big_asr import DoubaoBigASRClient
 from .asr.mock_asr import MockAsrClient
+from .asr.qwen_realtime_asr import QwenRealtimeASRClient
 from .audio.recorder import AudioRecorder, RecorderError
-from .config import AppConfig, ensure_config_file, load_config, write_env_file
+from .config import ASR_PROVIDER_QWEN, DOUBAO_ASR_PROVIDERS, AppConfig, ensure_config_file, load_config, write_env_file
 from .history import append_history, clear_history as clear_saved_history, load_history
 from .hotkey.base import HotkeyBackend, HotkeyError
 from .hotkey.evdev_backend import EvdevHotkeyBackend
 from .hotkey.pynput_backend import PynputHotkeyBackend
 from .inject import build_text_injector
 from .inject.base import InjectionError, TextInjectorBackend
+from .postprocess.organizer import ChatCompletionTextOrganizer
 from .postprocess.processor import TextPostProcessor
 from .resource_paths import resource_path
 from .ui.control_panel import ControlPanel
@@ -36,6 +39,10 @@ from .ui.tray import TrayController
 
 
 LOGGER = logging.getLogger("voice_input")
+HOTKEY_HOLD_THRESHOLD_MS = 350
+RECORDING_MODE_DICTATION = "dictation"
+RECORDING_MODE_PENDING_HOTKEY = "pending_hotkey"
+RECORDING_MODE_ORGANIZER = "organizer"
 
 
 class SingleInstanceLock:
@@ -66,6 +73,8 @@ class SingleInstanceLock:
 
 
 class SignalBus(QObject):
+    hotkey_pressed = Signal()
+    hotkey_released = Signal()
     toggle_requested = Signal()
     start_requested = Signal()
     stop_requested = Signal()
@@ -74,6 +83,8 @@ class SignalBus(QObject):
     quit_requested = Signal()
     asr_finished = Signal(str)
     asr_failed = Signal(str)
+    organizer_finished = Signal(str)
+    organizer_failed = Signal(str, str)
     audio_level = Signal(float)
 
 
@@ -117,6 +128,30 @@ class AsrStreamingWorker(threading.Thread):
             await self._client.send_audio_chunk(chunk)
         await self._client.finish_session()
         return await self._client.get_final_text()
+
+
+class TextOrganizerWorker(threading.Thread):
+    def __init__(
+        self,
+        organizer: ChatCompletionTextOrganizer,
+        text: str,
+        on_finished: Callable[[str], None],
+        on_error: Callable[[str, str], None],
+    ) -> None:
+        super().__init__(daemon=True, name="text-organizer-worker")
+        self._organizer = organizer
+        self._text = text
+        self._on_finished = on_finished
+        self._on_error = on_error
+
+    def run(self) -> None:
+        try:
+            final_text = self._organizer.organize(self._text)
+        except Exception as exc:  # noqa: BLE001 - errors need to reach UI.
+            LOGGER.exception("Text organizer failed")
+            self._on_error(str(exc), self._text)
+            return
+        self._on_finished(final_text)
 
 
 class CommandServer:
@@ -224,18 +259,32 @@ class VoiceInputApp:
         self.hotkey: HotkeyBackend | None = None
         self.command_server = CommandServer(config.socket_path, self.signals)
         self.asr_worker: AsrStreamingWorker | None = None
+        self.organizer_worker: TextOrganizerWorker | None = None
         self.is_recording = False
+        self._recording_mode = RECORDING_MODE_DICTATION
+        self._pending_result_mode = RECORDING_MODE_DICTATION
+        self._hotkey_down = False
+        self._ignore_next_hotkey_release = False
+        self._hotkey_pressed_at = 0.0
+        self._hotkey_hold_timer = QTimer()
+        self._hotkey_hold_timer.setSingleShot(True)
+        self._hotkey_hold_timer.setInterval(HOTKEY_HOLD_THRESHOLD_MS)
+        self._hotkey_hold_timer.timeout.connect(self._promote_hotkey_hold_recording)
         self._recording_max_level = 0.0
         self._recording_chunks = 0
 
+        self.signals.hotkey_pressed.connect(self._handle_hotkey_pressed)
+        self.signals.hotkey_released.connect(self._handle_hotkey_released)
         self.signals.toggle_requested.connect(self.toggle_recording)
-        self.signals.start_requested.connect(self.start_recording)
+        self.signals.start_requested.connect(lambda: self.start_recording(RECORDING_MODE_DICTATION))
         self.signals.stop_requested.connect(self.stop_recording)
         self.signals.settings_requested.connect(self.show_settings)
         self.signals.show_requested.connect(self.show_control_panel)
         self.signals.quit_requested.connect(self.quit)
         self.signals.asr_finished.connect(self._handle_asr_finished)
         self.signals.asr_failed.connect(self._handle_asr_failed)
+        self.signals.organizer_finished.connect(self._handle_organizer_finished)
+        self.signals.organizer_failed.connect(self._handle_organizer_failed)
         self.signals.audio_level.connect(self.overlay.update_level)
 
     def start(self) -> None:
@@ -256,7 +305,10 @@ class VoiceInputApp:
                 LOGGER.warning(message)
                 self.tray.notify("Voice Input Linux", message)
                 return
-            self.hotkey.start(lambda: self.signals.toggle_requested.emit())
+            self.hotkey.start(
+                lambda: self.signals.hotkey_pressed.emit(),
+                lambda: self.signals.hotkey_released.emit(),
+            )
             LOGGER.info("Hotkey backend started: %s", self.hotkey.name)
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to start hotkey backend")
@@ -304,13 +356,62 @@ class VoiceInputApp:
         if self.is_recording:
             self.stop_recording()
         else:
-            self.start_recording()
+            self.start_recording(RECORDING_MODE_DICTATION)
 
-    def start_recording(self) -> None:
+    def _handle_hotkey_pressed(self) -> None:
+        if self._hotkey_down:
+            return
+        self._hotkey_down = True
+        self._ignore_next_hotkey_release = False
+        self._hotkey_pressed_at = time.monotonic()
+
         if self.is_recording:
+            self._ignore_next_hotkey_release = True
+            self._hotkey_hold_timer.stop()
+            self.stop_recording()
+            LOGGER.info("Hotkey tap stopped recording; mode=%s", self._pending_result_mode)
+            return
+
+        self.start_recording(RECORDING_MODE_PENDING_HOTKEY)
+        if self.is_recording:
+            self._hotkey_hold_timer.start()
+
+    def _handle_hotkey_released(self) -> None:
+        self._hotkey_down = False
+        if self._ignore_next_hotkey_release:
+            self._ignore_next_hotkey_release = False
+            return
+        if not self.is_recording:
+            return
+
+        self._hotkey_hold_timer.stop()
+        held_ms = (time.monotonic() - self._hotkey_pressed_at) * 1000
+        if self._recording_mode == RECORDING_MODE_PENDING_HOTKEY and held_ms < HOTKEY_HOLD_THRESHOLD_MS:
+            self._recording_mode = RECORDING_MODE_ORGANIZER
+            self.overlay.set_recording_status("整理录音中")
+            LOGGER.info("Hotkey tap started organizer-mode recording")
+            return
+
+        if self._recording_mode == RECORDING_MODE_PENDING_HOTKEY:
+            self._recording_mode = RECORDING_MODE_DICTATION
+        if self._recording_mode == RECORDING_MODE_DICTATION:
+            self.stop_recording()
+
+    def _promote_hotkey_hold_recording(self) -> None:
+        if self._hotkey_down and self.is_recording and self._recording_mode == RECORDING_MODE_PENDING_HOTKEY:
+            self._recording_mode = RECORDING_MODE_DICTATION
+            self.overlay.set_recording_status("短句录音中")
+            LOGGER.info("Hotkey hold promoted to dictation mode")
+
+    def start_recording(self, mode: str = RECORDING_MODE_DICTATION) -> None:
+        if self.is_recording:
+            return
+        if self.organizer_worker and self.organizer_worker.is_alive():
+            self.overlay.show_error("上一段语音还在整理")
             return
         try:
             client = self._create_asr_client()
+            self._recording_mode = mode
             self._recording_max_level = 0.0
             self._recording_chunks = 0
             self.asr_worker = AsrStreamingWorker(
@@ -336,13 +437,19 @@ class VoiceInputApp:
         self.is_recording = True
         self.tray.set_recording(True)
         self.control_panel.set_recording(True)
-        self.overlay.show_recording()
-        LOGGER.info("Recording started")
+        status = "整理录音中" if mode == RECORDING_MODE_ORGANIZER else "录音中"
+        self.overlay.show_recording(status)
+        LOGGER.info("Recording started; mode=%s", mode)
 
     def stop_recording(self) -> None:
         if not self.is_recording:
             return
         self.is_recording = False
+        self._hotkey_hold_timer.stop()
+        if self._recording_mode == RECORDING_MODE_PENDING_HOTKEY:
+            self._recording_mode = RECORDING_MODE_DICTATION
+        self._pending_result_mode = self._recording_mode
+        self._recording_mode = RECORDING_MODE_DICTATION
         try:
             self.recorder.stop()
         except RecorderError as exc:
@@ -371,6 +478,8 @@ class VoiceInputApp:
 
     def _handle_asr_finished(self, text: str) -> None:
         self.asr_worker = None
+        mode = self._pending_result_mode
+        self._pending_result_mode = RECORDING_MODE_DICTATION
         final_text = self.postprocessor.process(text)
         if not final_text:
             LOGGER.warning(
@@ -381,8 +490,52 @@ class VoiceInputApp:
             self.overlay.show_error("识别结果为空")
             return
 
+        if mode == RECORDING_MODE_ORGANIZER:
+            self._start_text_organizer(final_text)
+            return
+
+        self._commit_final_text(final_text, self.config.asr_provider)
+
+    def _start_text_organizer(self, text: str) -> None:
+        organizer = ChatCompletionTextOrganizer(
+            endpoint=self.config.organizer_endpoint,
+            api_key=self.config.organizer_api_key,
+            model=self.config.organizer_model,
+            provider=self.config.organizer_provider,
+            timeout=self.config.organizer_timeout,
+        )
+        self.overlay.show_organizing()
+        self.organizer_worker = TextOrganizerWorker(
+            organizer=organizer,
+            text=text,
+            on_finished=lambda final_text: self.signals.organizer_finished.emit(final_text),
+            on_error=lambda error, fallback: self.signals.organizer_failed.emit(error, fallback),
+        )
+        self.organizer_worker.start()
+        LOGGER.info(
+            "Organizer-mode text organizer started; provider=%s model=%s text length=%s",
+            self.config.organizer_provider,
+            self.config.organizer_model,
+            len(text),
+        )
+
+    def _handle_organizer_finished(self, text: str) -> None:
+        self.organizer_worker = None
+        final_text = self.postprocessor.process(text)
+        if not final_text:
+            self.overlay.show_error("整理结果为空")
+            return
+        self._commit_final_text(final_text, f"{self.config.asr_provider}+{self.config.organizer_provider}")
+
+    def _handle_organizer_failed(self, message: str, fallback_text: str) -> None:
+        self.organizer_worker = None
+        LOGGER.error("Organizer-mode text organizer failed: %s", message)
+        self.tray.notify("整理模型失败", "已输入原始识别文本。")
+        self._commit_final_text(fallback_text, self.config.asr_provider)
+
+    def _commit_final_text(self, final_text: str, provider: str) -> None:
         try:
-            self.history_entries = append_history(final_text, self.config.asr_provider)
+            self.history_entries = append_history(final_text, provider)
             self.control_panel.set_history(self.history_entries)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Failed to write history: %s", exc)
@@ -400,6 +553,11 @@ class VoiceInputApp:
 
     def _handle_asr_failed(self, message: str) -> None:
         worker = self.asr_worker
+        self._hotkey_hold_timer.stop()
+        self._hotkey_down = False
+        self._ignore_next_hotkey_release = False
+        self._recording_mode = RECORDING_MODE_DICTATION
+        self._pending_result_mode = RECORDING_MODE_DICTATION
         if self.is_recording:
             self.is_recording = False
             try:
@@ -418,7 +576,7 @@ class VoiceInputApp:
     def _create_asr_client(self) -> AsrClient:
         if self.config.asr_provider == "mock":
             return MockAsrClient(self.config.mock_text)
-        if self.config.asr_provider in {"doubao", "doubao_big_asr", "bigmodel"}:
+        if self.config.asr_provider in DOUBAO_ASR_PROVIDERS:
             return DoubaoBigASRClient(
                 endpoint=self.config.effective_doubao_endpoint(),
                 app_key=self.config.doubao_app_key,
@@ -430,6 +588,17 @@ class VoiceInputApp:
                 enable_itn=self.config.doubao_enable_itn,
                 enable_ddc=self.config.doubao_enable_ddc,
                 enable_nonstream=self.config.effective_doubao_enable_nonstream(),
+            )
+        if self.config.asr_provider == ASR_PROVIDER_QWEN:
+            return QwenRealtimeASRClient(
+                endpoint=self.config.qwen_endpoint,
+                api_key=self.config.qwen_api_key,
+                model=self.config.qwen_model,
+                language=self.config.qwen_language,
+                sample_rate=self.config.sample_rate,
+                enable_server_vad=self.config.qwen_enable_server_vad,
+                vad_threshold=self.config.qwen_vad_threshold,
+                vad_silence_ms=self.config.qwen_vad_silence_ms,
             )
         raise AsrError(f"未知 ASR provider: {self.config.asr_provider}")
 
@@ -496,6 +665,7 @@ class VoiceInputApp:
         LOGGER.info("Text injector candidates: %s", self.injector.name)
 
     def quit(self) -> None:
+        self._hotkey_hold_timer.stop()
         if self.is_recording:
             self.stop_recording()
         if self.hotkey:

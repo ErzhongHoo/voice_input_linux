@@ -36,6 +36,38 @@ def test_list_input_devices_filters_output_only_devices(monkeypatch) -> None:
     assert devices[0].label == "1: USB Mic (1ch, 44100Hz)"
 
 
+def test_list_input_devices_can_rescan_portaudio(monkeypatch) -> None:
+    calls = []
+
+    class FakeSoundDevice:
+        _initialized = 1
+
+        def _terminate(self):
+            calls.append("terminate")
+            self._initialized -= 1
+
+        def _initialize(self):
+            calls.append("initialize")
+            self._initialized += 1
+
+        def query_devices(self):
+            calls.append("query")
+            return [
+                {
+                    "name": "Hotplug Mic",
+                    "max_input_channels": 1,
+                    "default_samplerate": 48000.0,
+                }
+            ]
+
+    monkeypatch.setitem(sys.modules, "sounddevice", FakeSoundDevice())
+
+    devices = list_input_devices(rescan=True)
+
+    assert calls == ["terminate", "initialize", "query"]
+    assert devices[0].name == "Hotplug Mic"
+
+
 def test_input_device_level_uses_selected_device(monkeypatch) -> None:
     calls = {}
 

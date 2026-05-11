@@ -27,13 +27,18 @@ class PynputHotkeyBackend(HotkeyBackend):
             return False
         return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
-    def start(self, callback: Callable[[], None]) -> None:
+    def start(
+        self,
+        callback: Callable[[], None],
+        release_callback: Callable[[], None] | None = None,
+    ) -> None:
         try:
             from pynput import keyboard
         except Exception as exc:  # noqa: BLE001
             raise HotkeyError(f"pynput 不可用: {exc}") from exc
 
         target_keys = self._target_keys(keyboard)
+        self._pressed = False
 
         def on_press(key: object) -> None:
             if key in target_keys and not self._pressed:
@@ -41,8 +46,10 @@ class PynputHotkeyBackend(HotkeyBackend):
                 callback()
 
         def on_release(key: object) -> None:
-            if key in target_keys:
+            if key in target_keys and self._pressed:
                 self._pressed = False
+                if release_callback is not None:
+                    release_callback()
 
         self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self._listener.start()
@@ -51,6 +58,7 @@ class PynputHotkeyBackend(HotkeyBackend):
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
+        self._pressed = False
 
     def _target_keys(self, keyboard: Any) -> set[object]:
         normalized = self.key_name.strip().lower().replace("-", "_")
@@ -73,4 +81,3 @@ class PynputHotkeyBackend(HotkeyBackend):
         if not targets:
             raise HotkeyError(f"不支持的 pynput 快捷键: {self.key_name}")
         return targets
-

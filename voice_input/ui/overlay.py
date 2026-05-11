@@ -82,11 +82,11 @@ class OverlayWindow(QWidget):
         self._hide_timer.timeout.connect(self.hide)
         self._apply_style()
 
-    def show_recording(self) -> None:
+    def show_recording(self, status: str = "录音中") -> None:
         self._hide_timer.stop()
         self._started_at = time.monotonic()
         self.icon_label.setText("MIC")
-        self.status_label.setText("录音中")
+        self.status_label.setText(status)
         self.timer_label.setText("00:00")
         self.preview_label.setText("")
         self.waveform.show()
@@ -97,6 +97,20 @@ class OverlayWindow(QWidget):
         self._timer.stop()
         self.icon_label.setText("...")
         self.status_label.setText("正在识别...")
+        self.timer_label.setText("")
+        self.preview_label.setText("")
+        self.waveform.hide()
+        self._show_positioned()
+
+    def set_recording_status(self, status: str) -> None:
+        self.status_label.setText(status)
+        if not self.isVisible():
+            self._show_positioned()
+
+    def show_organizing(self) -> None:
+        self._timer.stop()
+        self.icon_label.setText("...")
+        self.status_label.setText("正在整理...")
         self.timer_label.setText("")
         self.preview_label.setText("")
         self.waveform.hide()
