@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -28,7 +27,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from voice_input.audio.devices import InputDeviceInfo, list_input_devices, measure_input_device_level
+from voice_input.audio.devices import (
+    InputDeviceInfo,
+    list_input_devices,
+    measure_input_device_level,
+    stream_input_device_levels,
+)
 from voice_input.config import (
     ASR_PROVIDER_QWEN,
     DOUBAO_MODE_CUSTOM,
@@ -52,6 +56,22 @@ from voice_input.inject.base import InjectionError
 from voice_input.inject.clipboard_injector import copy_to_clipboard
 from voice_input.installer import install_service, toggle_command_text
 from voice_input.ui.hotkey_capture import HotkeyCaptureEdit
+
+
+def stop_microphone_thread(worker: object | None, thread: QThread | None, wait_ms: int, *, force: bool = False) -> bool:
+    if worker is not None:
+        stop = getattr(worker, "stop", None)
+        if callable(stop):
+            stop()
+    if thread is None or not thread.isRunning():
+        return True
+    thread.quit()
+    if thread.wait(wait_ms):
+        return True
+    if not force:
+        return False
+    thread.terminate()
+    return thread.wait(1000)
 
 
 class SettingsDialog(QDialog):
@@ -161,6 +181,7 @@ class SettingsDialog(QDialog):
         self.copy_toggle_command.clicked.connect(self._copy_toggle_command)
         self.prepare_wayland_button = QPushButton("安装并启动后台服务")
         self.prepare_wayland_button.clicked.connect(self._prepare_wayland_shortcut)
+        self.wayland_status = self._inline_status("", "muted")
         self.test_asr_connection = QPushButton("测试")
         self.test_asr_connection.setMinimumWidth(96)
         self.test_asr_connection.clicked.connect(lambda: self._start_model_connection_test("asr"))
@@ -451,13 +472,10 @@ class SettingsDialog(QDialog):
                 background: transparent;
             }}
             QComboBox::down-arrow {{
-                image: none;
-                width: 0;
-                height: 0;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid {focus};
-                margin-right: 10px;
+                image: url(:/qt-project.org/styles/commonstyle/images/arrow-down-16.png);
+                width: 16px;
+                height: 16px;
+                margin-right: 8px;
             }}
             QComboBox QAbstractItemView {{
                 background: {panel};
@@ -707,6 +725,7 @@ class SettingsDialog(QDialog):
         form.addRow(note)
         form.addRow("toggle 命令", self._toggle_command_widget())
         form.addRow("", self.prepare_wayland_button)
+        form.addRow("", self.wayland_status)
         return tab
 
     def _toggle_command_widget(self) -> QWidget:
@@ -819,20 +838,20 @@ class SettingsDialog(QDialog):
         try:
             copy_to_clipboard(self.toggle_command.text())
         except InjectionError as exc:
-            QMessageBox.warning(self, "复制失败", str(exc))
+            self._set_inline_status(self.wayland_status, "复制失败", "warn", str(exc))
             return
-        QMessageBox.information(self, "已复制", "toggle 命令已复制到剪贴板。")
+        self._set_inline_status(self.wayland_status, "已复制 toggle 命令", "ok")
 
     def _prepare_wayland_shortcut(self) -> None:
         try:
             status = install_service(start=True)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "后台服务设置失败", str(exc))
+            self._set_inline_status(self.wayland_status, "后台服务设置失败", "warn", str(exc))
             return
         if status == 0:
-            QMessageBox.information(self, "后台服务已启动", "现在可以把 toggle 命令绑定到系统全局快捷键。")
+            self._set_inline_status(self.wayland_status, "后台服务已启动", "ok")
         else:
-            QMessageBox.warning(self, "后台服务设置失败", f"安装或启动失败，退出码: {status}")
+            self._set_inline_status(self.wayland_status, f"后台服务设置失败: {status}", "warn")
 
     def _advanced_tab(self) -> QWidget:
         tab = QWidget()
@@ -922,12 +941,12 @@ class SettingsDialog(QDialog):
         self._test_thread = thread
         thread.start()
 
-    def _stop_input_device_test(self) -> None:
+    def _stop_input_device_test(self, wait_ms: int = 0, *, force: bool = False) -> bool:
         if self._test_worker is None:
-            return
+            return True
         self.input_test_result.setText("停止中...")
         self.test_input_device.setEnabled(False)
-        self._test_worker.stop()
+        return stop_microphone_thread(self._test_worker, self._test_thread, wait_ms, force=force)
 
     def _handle_input_test_level_changed(self, peak: float, rms: float) -> None:
         level = max(peak, min(1.0, rms * 5.0))
@@ -949,7 +968,6 @@ class SettingsDialog(QDialog):
         self.input_level_animation.set_level(0.0)
         self.input_test_result.setText("测试失败")
         self._set_inline_status(self.input_device_notice, error.suggestion, "warn", message)
-        QMessageBox.warning(self, error.title, f"{error.summary}\n\n{error.suggestion}\n\n详细信息:\n{message}")
 
     def _clear_input_test_worker(self) -> None:
         self._input_test_timer.stop()
@@ -984,12 +1002,9 @@ class SettingsDialog(QDialog):
         self._monitor_thread = thread
         thread.start()
 
-    def _stop_input_monitor(self, wait_ms: int = 0, restart: bool = False) -> None:
-        self._restart_monitor_after_stop = restart
-        if self._monitor_worker is not None:
-            self._monitor_worker.stop()
-        if wait_ms and self._monitor_thread is not None and self._monitor_thread.isRunning():
-            self._monitor_thread.wait(wait_ms)
+    def _stop_input_monitor(self, wait_ms: int = 0, restart: bool = False, *, force: bool = False) -> bool:
+        self._restart_monitor_after_stop = restart and not force
+        return stop_microphone_thread(self._monitor_worker, self._monitor_thread, wait_ms, force=force)
 
     def _restart_input_monitor(self) -> None:
         if self._syncing_settings or self._test_thread is not None:
@@ -1032,14 +1047,11 @@ class SettingsDialog(QDialog):
     def closeEvent(self, event: object) -> None:  # noqa: D401
         self._connection_test_closing = True
         self._input_device_refresh_timer.stop()
-        self._stop_input_monitor(wait_ms=1000)
+        self._stop_input_monitor(wait_ms=2500, force=True)
         if self._auto_save_timer.isActive():
             self._auto_save_timer.stop()
             self._auto_save()
-        if self._test_worker is not None:
-            self._test_worker.stop()
-        if self._test_thread is not None and self._test_thread.isRunning():
-            self._test_thread.wait(1000)
+        self._stop_input_device_test(wait_ms=2500, force=True)
         super().closeEvent(event)
 
     def showEvent(self, event: object) -> None:  # noqa: D401
@@ -1076,7 +1088,6 @@ class SettingsDialog(QDialog):
                 self.input_device_combo.setCurrentIndex(1)
             if show_error:
                 self._set_inline_status(self.input_device_notice, f"读取失败: {_short_text(str(exc), 54)}", "warn", str(exc))
-                QMessageBox.warning(self, "无法读取麦克风", str(exc))
             self.input_device_combo.blockSignals(False)
             return
 
@@ -1290,14 +1301,16 @@ class MicrophoneMonitorWorker(QObject):
 
     def run(self) -> None:
         try:
-            while self._running:
-                peak, rms = measure_input_device_level(self.device, duration_seconds=0.08, channels=self.channels)
+            levels = stream_input_device_levels(
+                self.device,
+                channels=self.channels,
+                interval_seconds=self.interval_seconds,
+                stop_requested=lambda: not self._running,
+            )
+            for peak, rms in levels:
                 if not self._running:
                     break
                 self.level_changed.emit(peak, rms)
-                deadline = time.monotonic() + self.interval_seconds
-                while self._running and time.monotonic() < deadline:
-                    time.sleep(0.05)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
             return

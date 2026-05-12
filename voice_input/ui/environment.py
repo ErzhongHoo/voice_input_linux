@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
@@ -110,7 +109,8 @@ class EnvironmentDialog(QDialog):
         try:
             copy_to_clipboard(format_check_report(self.checks))
         except InjectionError as exc:
-            QMessageBox.warning(self, "复制失败", str(exc))
+            self.summary.setText(f"复制失败: {exc}")
+            self.summary.setToolTip(str(exc))
 
     def _apply_style(self) -> None:
         dark = self.palette().window().color().lightness() < 128

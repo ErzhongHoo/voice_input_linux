@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import threading
+import time
+from collections.abc import Callable, Iterator
 
 import numpy as np
 
@@ -87,6 +89,48 @@ def measure_input_device_level(
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"麦克风测试失败: {exc}") from exc
 
+    return _levels_from_samples(data)
+
+
+def stream_input_device_levels(
+    device: str | int | None,
+    *,
+    channels: int = 1,
+    sample_seconds: float = 0.08,
+    interval_seconds: float = 0.45,
+    stop_requested: Callable[[], bool] | None = None,
+) -> Iterator[tuple[float, float]]:
+    try:
+        import sounddevice as sd
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"sounddevice 不可用: {exc}") from exc
+
+    normalized_device = _normalize_device(device)
+    should_stop = stop_requested or (lambda: False)
+    try:
+        with _SOUNDDEVICE_LOCK:
+            info = sd.query_devices(normalized_device, "input")
+            sample_rate = int(float(info.get("default_samplerate") or 48000))
+            frames = max(1, int(sample_rate * sample_seconds))
+            stream = sd.InputStream(
+                samplerate=sample_rate,
+                channels=channels,
+                dtype="int16",
+                device=normalized_device,
+                blocksize=frames,
+            )
+        with stream:
+            while not should_stop():
+                data, _overflowed = stream.read(frames)
+                yield _levels_from_samples(data)
+                deadline = time.monotonic() + interval_seconds
+                while not should_stop() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"麦克风监听失败: {exc}") from exc
+
+
+def _levels_from_samples(data: object) -> tuple[float, float]:
     samples = np.asarray(data, dtype=np.float32).reshape(-1)
     if samples.size == 0:
         return 0.0, 0.0

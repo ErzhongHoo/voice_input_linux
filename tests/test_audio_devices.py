@@ -5,7 +5,7 @@ import sys
 
 import numpy as np
 
-from voice_input.audio.devices import list_input_devices, measure_input_device_level
+from voice_input.audio.devices import list_input_devices, measure_input_device_level, stream_input_device_levels
 
 
 def test_list_input_devices_filters_output_only_devices(monkeypatch) -> None:
@@ -92,3 +92,50 @@ def test_input_device_level_uses_selected_device(monkeypatch) -> None:
     assert calls["rec"] == (16, 16000, 1, "int16", 8)
     assert peak == 1.0
     assert 0.6 < rms < 0.7
+
+
+def test_stream_input_device_levels_keeps_one_input_stream_open(monkeypatch) -> None:
+    calls = {"query": 0, "streams": 0, "enters": 0, "exits": 0, "reads": 0}
+
+    def query_devices(device, kind):
+        calls["query"] += 1
+        assert (device, kind) == ("USB Mic", "input")
+        return {"default_samplerate": 16000.0}
+
+    class FakeInputStream:
+        def __init__(self, samplerate, channels, dtype, device, blocksize):
+            calls["streams"] += 1
+            assert (samplerate, channels, dtype, device, blocksize) == (16000, 1, "int16", "USB Mic", 160)
+
+        def __enter__(self):
+            calls["enters"] += 1
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            calls["exits"] += 1
+
+        def read(self, frames):
+            calls["reads"] += 1
+            assert frames == 160
+            return np.array([[0], [16384], [-32768]], dtype=np.int16), False
+
+    fake_sounddevice = SimpleNamespace(
+        query_devices=query_devices,
+        InputStream=FakeInputStream,
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sounddevice)
+
+    levels = stream_input_device_levels(
+        "USB Mic",
+        sample_seconds=0.01,
+        interval_seconds=0.0,
+    )
+    try:
+        first = next(levels)
+        second = next(levels)
+        third = next(levels)
+    finally:
+        levels.close()
+
+    assert first == second == third
+    assert calls == {"query": 1, "streams": 1, "enters": 1, "exits": 1, "reads": 3}

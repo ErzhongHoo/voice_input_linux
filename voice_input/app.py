@@ -14,7 +14,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from .asr.base import AsrClient, AsrError
 from .asr.doubao_big_asr import DoubaoBigASRClient
@@ -22,7 +22,7 @@ from .asr.mock_asr import MockAsrClient
 from .asr.qwen_realtime_asr import QwenRealtimeASRClient
 from .audio.recorder import AudioRecorder, RecorderError
 from .config import ASR_PROVIDER_QWEN, DOUBAO_ASR_PROVIDERS, AppConfig, ensure_config_file, load_config, write_env_file
-from .error_actions import ActionableError, describe_error
+from .error_actions import describe_error
 from .history import append_history, clear_history as clear_saved_history, load_history
 from .hotkey.base import HotkeyBackend, HotkeyError
 from .hotkey.evdev_backend import EvdevHotkeyBackend
@@ -301,42 +301,12 @@ class VoiceInputApp:
 
     def _show_actionable_error(self, message: str, context: str, notification_title: str | None = None) -> None:
         error = describe_error(message, context)
-        detail = str(message)
         overlay_message = f"{error.summary}\n{error.suggestion}"
         self.overlay.show_error(overlay_message)
-        self.tray.notify(notification_title or error.title, error.suggestion)
-        if self.control_panel.isVisible():
-            self._show_actionable_error_dialog(error, detail)
 
-    def _show_actionable_error_dialog(self, error: ActionableError, detail: str) -> None:
-        box = QMessageBox(self.control_panel)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle(error.title)
-        box.setText(error.summary)
-        box.setInformativeText(f"{error.suggestion}\n\n详细信息:\n{detail}")
-        action_button = None
-        if error.primary_action == "model":
-            action_button = box.addButton("打开模型设置", QMessageBox.ButtonRole.ActionRole)
-        elif error.primary_action == "settings":
-            action_button = box.addButton("打开设置", QMessageBox.ButtonRole.ActionRole)
-        elif error.primary_action == "environment":
-            action_button = box.addButton("环境检查", QMessageBox.ButtonRole.ActionRole)
-        copy_button = box.addButton("复制错误", QMessageBox.ButtonRole.ActionRole)
-        box.addButton(QMessageBox.StandardButton.Close)
-        box.exec()
-
-        clicked = box.clickedButton()
-        if clicked == copy_button:
-            QApplication.clipboard().setText(detail)
-        elif action_button is not None and clicked == action_button:
-            if error.primary_action == "environment":
-                self.show_environment()
-            elif error.primary_action == "model":
-                self.control_panel.show_panel()
-                self.control_panel.show_model_page()
-            else:
-                self.control_panel.show_panel()
-                self.control_panel.show_settings_page()
+    def _show_empty_result_notice(self, message: str) -> None:
+        error = describe_error(message, "asr_empty")
+        self.overlay.show_error(f"{error.summary}\n{error.suggestion}")
 
     def _start_hotkey(self) -> None:
         try:
@@ -531,7 +501,7 @@ class VoiceInputApp:
                 self._recording_max_level,
                 self._recording_chunks,
             )
-            self._show_actionable_error("识别结果为空", "asr_empty", "没有识别到文字")
+            self._show_empty_result_notice("识别结果为空")
             return
 
         if mode == RECORDING_MODE_ORGANIZER:
@@ -567,14 +537,14 @@ class VoiceInputApp:
         self.organizer_worker = None
         final_text = self.postprocessor.process(text)
         if not final_text:
-            self._show_actionable_error("整理结果为空", "organizer_empty", "整理结果为空")
+            self._show_empty_result_notice("整理结果为空")
             return
         self._commit_final_text(final_text, f"{self.config.asr_provider}+{self.config.organizer_provider}")
 
     def _handle_organizer_failed(self, message: str, fallback_text: str) -> None:
         self.organizer_worker = None
         LOGGER.error("Organizer-mode text organizer failed: %s", message)
-        self.tray.notify("整理模型失败", "已输入原始识别文本。")
+        self.overlay.show_error("整理模型失败\n已输入原始识别文本。")
         self._commit_final_text(fallback_text, self.config.asr_provider)
 
     def _commit_final_text(self, final_text: str, provider: str) -> None:
@@ -648,7 +618,7 @@ class VoiceInputApp:
 
     def show_settings(self) -> None:
         if self.is_recording:
-            QMessageBox.warning(None, "Voice Input Linux 设置", "录音中不能修改设置，请先停止录音。")
+            self.overlay.show_error("录音中不能修改设置\n请先停止录音。")
             return
         dialog = SettingsDialog(self.config, on_auto_save=self.save_panel_settings)
         self.settings_dialog = dialog
@@ -670,7 +640,7 @@ class VoiceInputApp:
 
     def save_panel_settings(self, env: dict[str, str]) -> bool:
         if self.is_recording:
-            QMessageBox.warning(self.control_panel, "Voice Input Linux 设置", "录音中不能修改设置，请先停止录音。")
+            self.overlay.show_error("录音中不能修改设置\n请先停止录音。")
             return False
         show_notification = env.pop("_VOICE_INPUT_SAVE_NOTIFICATION", "true") != "false"
         config_file = env.pop("VOICE_INPUT_CONFIG_FILE", self.config.config_file) or self.config.config_file
@@ -679,7 +649,7 @@ class VoiceInputApp:
             self._apply_new_config(load_config(config_file))
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to save settings")
-            QMessageBox.critical(self.control_panel, "保存设置失败", str(exc))
+            self.overlay.show_error(f"保存设置失败\n{exc}")
             return False
         if show_notification:
             self.tray.notify("设置已保存", f"配置文件: {self.config.config_file}")
@@ -696,7 +666,7 @@ class VoiceInputApp:
             self.control_panel.set_history(self.history_entries)
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to clear history")
-            QMessageBox.critical(self.control_panel, "清空历史记录失败", str(exc))
+            self.overlay.show_error(f"清空历史记录失败\n{exc}")
 
     def _apply_new_config(self, new_config: AppConfig) -> None:
         old_socket_path = self.config.socket_path
@@ -731,7 +701,11 @@ class VoiceInputApp:
             self.hotkey.stop()
         self.command_server.stop()
         self.tray.hide()
+        if self.settings_dialog is not None:
+            self.settings_dialog.close()
         self.control_panel.close()
+        self.overlay.close()
+        self.qt_app.processEvents()
         self.qt_app.quit()
 
 
@@ -743,6 +717,7 @@ def configure_logging(config: AppConfig) -> None:
 
 
 def run_app(show_panel: bool = False) -> int:
+    _configure_qt_platform()
     config = load_config()
     ensure_config_file(config.config_file, config)
     configure_logging(config)
@@ -769,3 +744,11 @@ def run_app(show_panel: bool = False) -> int:
         return int(qt_app.exec())
     finally:
         instance_lock.release()
+
+
+def _configure_qt_platform() -> None:
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return
+    is_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    if is_wayland and os.environ.get("DISPLAY") and os.environ.get("VOICE_INPUT_FORCE_XCB") == "1":
+        os.environ["QT_QPA_PLATFORM"] = "xcb"

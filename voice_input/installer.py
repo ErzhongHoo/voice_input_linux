@@ -191,7 +191,7 @@ def _launcher_command(command: str | None = None) -> list[str]:
     appimage = os.environ.get("VOICE_INPUT_APPIMAGE") or os.environ.get("APPIMAGE")
     suffix = [command] if command else []
     if appimage:
-        return [appimage, *suffix]
+        return ["/usr/bin/env", "APPIMAGE_EXTRACT_AND_RUN=1", appimage, *suffix]
     if getattr(sys, "frozen", False):
         return [sys.executable, *suffix]
     return ["/usr/bin/env", f"PYTHONPATH={_project_root()}", sys.executable, "-m", "voice_input.main", *suffix]

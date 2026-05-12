@@ -72,6 +72,7 @@ from voice_input.ui.settings import (
     MicrophoneMonitorWorker,
     MicrophoneTestWorker,
     ModelConnectionSignals,
+    stop_microphone_thread,
 )
 
 
@@ -819,12 +820,12 @@ class ControlPanel(QWidget):
         self._test_thread = thread
         thread.start()
 
-    def _stop_input_device_test(self) -> None:
+    def _stop_input_device_test(self, wait_ms: int = 0, *, force: bool = False) -> bool:
         if self._test_worker is None:
-            return
+            return True
         self.input_test_result.setText("停止中...")
         self.test_input_device.setEnabled(False)
-        self._test_worker.stop()
+        return stop_microphone_thread(self._test_worker, self._test_thread, wait_ms, force=force)
 
     def _handle_input_test_level_changed(self, peak: float, rms: float) -> None:
         level = max(peak, min(1.0, rms * 5.0))
@@ -846,7 +847,6 @@ class ControlPanel(QWidget):
         self.input_level_animation.set_level(0.0)
         self.input_test_result.setText("测试失败")
         self._set_inline_status(self.input_device_notice, error.suggestion, "warn", message)
-        QMessageBox.warning(self, error.title, f"{error.summary}\n\n{error.suggestion}\n\n详细信息:\n{message}")
 
     def _clear_input_test_worker(self) -> None:
         self._input_test_timer.stop()
@@ -886,12 +886,9 @@ class ControlPanel(QWidget):
         self._monitor_thread = thread
         thread.start()
 
-    def _stop_input_monitor(self, wait_ms: int = 0, restart: bool = False) -> None:
-        self._restart_monitor_after_stop = restart
-        if self._monitor_worker is not None:
-            self._monitor_worker.stop()
-        if wait_ms and self._monitor_thread is not None and self._monitor_thread.isRunning():
-            self._monitor_thread.wait(wait_ms)
+    def _stop_input_monitor(self, wait_ms: int = 0, restart: bool = False, *, force: bool = False) -> bool:
+        self._restart_monitor_after_stop = restart and not force
+        return stop_microphone_thread(self._monitor_worker, self._monitor_thread, wait_ms, force=force)
 
     def _restart_input_monitor(self) -> None:
         if self._syncing_settings or self._recording or self._test_thread is not None:
@@ -958,7 +955,6 @@ class ControlPanel(QWidget):
                 self.input_device_combo.setCurrentIndex(1)
             if show_error:
                 self._set_inline_status(self.input_device_notice, f"读取失败: {_short_text(str(exc), 54)}", "warn", str(exc))
-                QMessageBox.warning(self, "无法读取麦克风", str(exc))
             self.input_device_combo.blockSignals(False)
             return
 
@@ -1247,17 +1243,26 @@ class ControlPanel(QWidget):
         try:
             copy_to_clipboard(self.toggle_command_input.text())
         except InjectionError as exc:
-            QMessageBox.warning(self, "复制失败", str(exc))
+            self.copy_toggle_button.setToolTip(str(exc))
+            self._set_auto_save_status("复制失败", "warn")
+            return
+        self.copy_toggle_button.setToolTip("已复制 toggle 命令")
+        self._set_auto_save_status("已复制", "ok")
 
     def _prepare_wayland_shortcut(self) -> None:
         try:
             status = install_service(start=True)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "后台服务设置失败", str(exc))
+            self.prepare_wayland_button.setToolTip(str(exc))
+            self._set_auto_save_status("服务设置失败", "warn")
             return
         self.refresh_installation_status()
         if status != 0:
-            QMessageBox.warning(self, "后台服务设置失败", f"安装或启动失败，退出码: {status}")
+            self.prepare_wayland_button.setToolTip(f"安装或启动失败，退出码: {status}")
+            self._set_auto_save_status("服务设置失败", "warn")
+        else:
+            self.prepare_wayland_button.setToolTip("后台服务已启动")
+            self._set_auto_save_status("服务已启动", "ok")
 
     def _select_page(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
@@ -1300,11 +1305,13 @@ class ControlPanel(QWidget):
                 status = install_service(start=False)
                 action = "开启自启动"
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "自启动设置失败", str(exc))
+            self._set_pill(self.autostart_status, "设置失败", "warn")
+            self.autostart_button.setToolTip(str(exc))
             return
         self.refresh_installation_status()
         if status != 0:
-            QMessageBox.warning(self, "自启动设置失败", f"{action}失败，退出码: {status}")
+            self._set_pill(self.autostart_status, "设置失败", "warn")
+            self.autostart_button.setToolTip(f"{action}失败，退出码: {status}")
 
     def _toggle_desktop_entry(self) -> None:
         try:
@@ -1315,11 +1322,13 @@ class ControlPanel(QWidget):
                 status = install_desktop()
                 action = "安装桌面图标"
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "桌面图标设置失败", str(exc))
+            self._set_pill(self.desktop_status, "设置失败", "warn")
+            self.desktop_button.setToolTip(str(exc))
             return
         self.refresh_installation_status()
         if status != 0:
-            QMessageBox.warning(self, "桌面图标设置失败", f"{action}失败，退出码: {status}")
+            self._set_pill(self.desktop_status, "设置失败", "warn")
+            self.desktop_button.setToolTip(f"{action}失败，退出码: {status}")
 
     def _copy_history_item(self, item: QListWidgetItem) -> None:
         text = item.data(Qt.ItemDataRole.UserRole)
@@ -1328,7 +1337,8 @@ class ControlPanel(QWidget):
         try:
             copy_to_clipboard(str(text))
         except InjectionError as exc:
-            QMessageBox.warning(self, "复制失败", str(exc))
+            self._set_auto_save_status("复制失败", "warn")
+            self.history_list.setToolTip(str(exc))
 
     def _clear_history(self) -> None:
         if self.history_list.count() == 0:
@@ -1410,11 +1420,8 @@ class ControlPanel(QWidget):
         self._connection_test_closing = True
         self._input_device_refresh_timer.stop()
         self._timer.stop()
-        self._stop_input_monitor(wait_ms=1000)
-        if self._test_worker is not None:
-            self._test_worker.stop()
-        if self._test_thread is not None and self._test_thread.isRunning():
-            self._test_thread.wait(1000)
+        self._stop_input_monitor(wait_ms=2500, force=True)
+        self._stop_input_device_test(wait_ms=2500, force=True)
         super().closeEvent(event)
 
     def hideEvent(self, event: object) -> None:  # noqa: D401
@@ -1603,13 +1610,10 @@ class ControlPanel(QWidget):
                 background: transparent;
             }}
             QComboBox::down-arrow {{
-                image: none;
-                width: 0;
-                height: 0;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid {focus};
-                margin-right: 10px;
+                image: url(:/qt-project.org/styles/commonstyle/images/arrow-down-16.png);
+                width: 16px;
+                height: 16px;
+                margin-right: 8px;
             }}
             QComboBox QAbstractItemView {{
                 background: {panel};

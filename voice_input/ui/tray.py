@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
@@ -22,9 +23,13 @@ class TrayController:
         self._on_settings = on_settings
         self._on_quit = on_quit
         self._recording = False
+        self._idle_icon = self._icon(False)
+        self._recording_icon = self._icon(True)
+        self._tooltip = "Voice Input Linux"
+        self._last_notification: tuple[str, str, float] | None = None
 
-        self.tray = QSystemTrayIcon(self._icon(False))
-        self.tray.setToolTip("Voice Input Linux")
+        self.tray = QSystemTrayIcon(self._idle_icon)
+        self.tray.setToolTip(self._tooltip)
 
         self.menu = QMenu()
         self.show_action = QAction("打开面板")
@@ -46,18 +51,30 @@ class TrayController:
         self.tray.activated.connect(self._handle_activated)
 
     def show(self) -> None:
-        self.tray.show()
+        if not self.tray.isVisible():
+            self.tray.show()
 
     def hide(self) -> None:
-        self.tray.hide()
+        if self.tray.isVisible():
+            self.tray.hide()
 
     def set_recording(self, recording: bool) -> None:
+        if self._recording == recording:
+            return
         self._recording = recording
         self.toggle_action.setText("停止录音" if recording else "开始录音")
-        self.tray.setIcon(self._icon(recording))
-        self.tray.setToolTip("Voice Input Linux - 录音中" if recording else "Voice Input Linux")
+        tooltip = "Voice Input Linux - 录音中" if recording else "Voice Input Linux"
+        if self._tooltip != tooltip:
+            self._tooltip = tooltip
+            self.tray.setToolTip(tooltip)
 
     def notify(self, title: str, message: str) -> None:
+        now = time.monotonic()
+        if self._last_notification is not None:
+            last_title, last_message, last_time = self._last_notification
+            if title == last_title and message == last_message and now - last_time < 10.0:
+                return
+        self._last_notification = (title, message, now)
         self.tray.showMessage(title, message, self.tray.icon(), 5000)
 
     def _handle_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
@@ -67,15 +84,12 @@ class TrayController:
     def _icon(self, recording: bool) -> QIcon:
         if not recording:
             try:
-                with resource_path("voice-input-linux.svg") as icon_path:
+                with resource_path("voice-input-linux.png") as icon_path:
                     bundled = QIcon(str(icon_path))
                 if not bundled.isNull():
                     return bundled
             except Exception:  # noqa: BLE001
                 pass
-        themed = QIcon.fromTheme("audio-input-microphone")
-        if not themed.isNull() and not recording:
-            return themed
         size = QSize(64, 64)
         pixmap = QPixmap(size)
         pixmap.fill(QColor("transparent"))

@@ -45,9 +45,9 @@ mkdir -p "${BUILD_DIR}" "${APPDIR}/usr/opt" "${APPDIR}/usr/share/applications" \
 cp -a "${DIST_DIR}/${APP_ID}" "${APPDIR}/usr/opt/${APP_ID}"
 install -m 0755 "${ROOT}/packaging/appimage/AppRun" "${APPDIR}/AppRun"
 
-install -m 0644 "${ROOT}/voice_input/resources/${APP_ID}.desktop" \
+install -m 0755 "${ROOT}/voice_input/resources/${APP_ID}.desktop" \
   "${APPDIR}/${APPSTREAM_ID}.desktop"
-install -m 0644 "${ROOT}/voice_input/resources/${APP_ID}.desktop" \
+install -m 0755 "${ROOT}/voice_input/resources/${APP_ID}.desktop" \
   "${APPDIR}/usr/share/applications/${APPSTREAM_ID}.desktop"
 install -m 0644 "${ROOT}/voice_input/resources/${APP_ID}.svg" \
   "${APPDIR}/${APP_ID}.svg"

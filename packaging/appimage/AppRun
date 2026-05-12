@@ -10,6 +10,7 @@ export VOICE_INPUT_APPDIR="${HERE}"
 if [[ -n "${APPIMAGE:-}" ]]; then
   export VOICE_INPUT_APPIMAGE="${APPIMAGE}"
 fi
+unset DESKTOP_STARTUP_ID
 
 if [[ -x "${GLIBC_DIR}/ld-linux-x86-64.so.2" ]]; then
   export VOICE_INPUT_BUNDLED_GLIBC=1
